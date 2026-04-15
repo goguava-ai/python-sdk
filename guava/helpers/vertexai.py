@@ -1,38 +1,13 @@
 import logging
 import time
-from abc import ABC, abstractmethod
+
+from .rag import EmbeddingModel, GenerationModel
 
 logger = logging.getLogger("guava.helpers.rag")
 
 DEFAULT_EMBEDDING_MODEL = "gemini-embedding-001"
 DEFAULT_EMBEDDING_DIM = 768
-
-
-class EmbeddingModel(ABC):
-    """Abstract base class for embedding models used in Guava RAG helpers.
-
-    Subclass and implement ``embed()`` and ``ndims()``. Optionally override
-    ``embed_documents()`` and ``embed_query()`` to use task-specific behaviour
-    (e.g. different task types for Vertex AI, different input types for Pinecone).
-    """
-
-    @abstractmethod
-    def ndims(self) -> int:
-        """Return the dimensionality of the produced embedding vectors."""
-        ...
-
-    @abstractmethod
-    def embed(self, texts: list[str]) -> list[list[float]]:
-        """Embed a batch of texts into vectors."""
-        ...
-
-    def embed_documents(self, texts: list[str]) -> list[list[float]]:
-        """Embed texts for document indexing. Defaults to ``embed()``."""
-        return self.embed(texts)
-
-    def embed_query(self, text: str) -> list[float]:
-        """Embed a single query for search. Defaults to ``embed([text])[0]``."""
-        return self.embed([text])[0]
+DEFAULT_QA_MODEL = "gemini-2.5-flash"
 
 
 class VertexAIEmbedding(EmbeddingModel):
@@ -94,41 +69,29 @@ class VertexAIEmbedding(EmbeddingModel):
         return [e.values for e in response.embeddings]
 
 
-class PineconeInferenceEmbedding(EmbeddingModel):
-    """Embedding via Pinecone's hosted Inference API.
+class VertexAIGeneration(GenerationModel):
+    """QA generation via Vertex AI (Gemini).
 
-    Uses different input types for document indexing vs. query search.
-    No additional API key required beyond the Pinecone API key.
+    The caller is responsible for supplying a configured ``google.genai.Client``.
+    Guava helpers never create API clients on your behalf — you control
+    credentials, project selection, and quota settings.
 
     Args:
-        pc: A ``Pinecone`` client instance.
-        model: Pinecone inference model name.
-        dimensionality: Output vector size.
+        client: A configured ``google.genai.Client`` instance.
+        model: Gemini model name.
     """
 
-    def __init__(self, pc, model: str = "multilingual-e5-large", dimensionality: int = 1024):
-        self._pc = pc
+    def __init__(self, *, client, model: str = DEFAULT_QA_MODEL):
         self._model = model
-        self._dimensionality = dimensionality
+        self._client = client
 
-    def ndims(self) -> int:
-        return self._dimensionality
-
-    def embed(self, texts: list[str]) -> list[list[float]]:
-        return self.embed_documents(texts)
-
-    def embed_documents(self, texts: list[str]) -> list[list[float]]:
-        response = self._pc.inference.embed(
+    def generate(self, prompt: str, *, system_instruction: str | None = None) -> str:
+        t0 = time.perf_counter()
+        config = {"system_instruction": system_instruction} if system_instruction else {}
+        response = self._client.models.generate_content(
             model=self._model,
-            inputs=texts,
-            parameters={"input_type": "passage", "truncate": "END"},
+            contents=prompt,
+            config=config,
         )
-        return [e["values"] for e in response]
-
-    def embed_query(self, text: str) -> list[float]:
-        response = self._pc.inference.embed(
-            model=self._model,
-            inputs=[text],
-            parameters={"input_type": "query", "truncate": "END"},
-        )
-        return response[0]["values"]
+        logger.info("generate_content: %.3fs", time.perf_counter() - t0)
+        return response.text

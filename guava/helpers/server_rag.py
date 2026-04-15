@@ -31,7 +31,7 @@ class ServerRAG:
     (skip unchanged docs, delete stale docs across runs).
 
     Args:
-        base_url: Guava server base URL (e.g. ``https://guava-dev.gridspace.com/``).
+        base_url: Guava server base URL (e.g. ``https://app.goguava.ai/``).
         api_key: Guava API key (Bearer token).
         namespace: Optional prefix to scope this instance's documents. Required
             when running multiple instances concurrently for the same user.

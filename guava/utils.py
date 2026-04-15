@@ -2,11 +2,12 @@ import os
 import functools
 import warnings
 import httpx
+import json
 
 from typing import Callable, TypeVar, Any, cast
 from .threading_utils import FirstEntry
 
-DEFAULT_BASE_URL: str = "https://guava-dev.gridspace.com/"
+DEFAULT_BASE_URL: str = "https://app.goguava.ai/"
 
 def get_base_url() -> str:
     return os.getenv("GUAVA_BASE_URL", DEFAULT_BASE_URL)
@@ -83,3 +84,10 @@ class NoOpLogger:
     
 def check_exactly_one(*args) -> bool:
     return sum(arg is not None for arg in args) == 1
+
+def is_jsonable(value) -> bool:
+    try:
+        json.dumps(value)
+        return True
+    except (TypeError, ValueError):
+        return False

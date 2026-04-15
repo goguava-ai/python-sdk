@@ -2,8 +2,7 @@ import uuid
 
 import numpy as np
 
-from .embedding import EmbeddingModel
-from .vectorstore import VectorStore
+from .rag import EmbeddingModel, VectorStore
 
 
 class PgVectorStore(VectorStore):

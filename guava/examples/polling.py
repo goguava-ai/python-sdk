@@ -14,7 +14,7 @@ import os
 
 import guava
 from guava import Field, Say
-from guava.outbound_campaigns import get_or_create_campaign
+from guava.campaigns import get_or_create_campaign, Contact
 
 
 # -- Campaign setup ----------------------------------------------------------
@@ -23,9 +23,9 @@ CAMPAIGN_NAME = "political-poll-example"
 ORIGIN_PHONE_NUMBER = os.environ["GUAVA_AGENT_NUMBER"]
 
 contacts = [
-    {"phone_number": "+13235550102", "data": {"first_name": "Alice", "district": "District 5"}},
-    {"phone_number": "+13235550103", "data": {"first_name": "Bob", "district": "District 12"}},
-    {"phone_number": "+13235550104", "data": {"first_name": "Carol", "district": "District 5"}},
+    Contact(phone_number="+13235550102", data={"first_name": "Alice", "district": "District 5"}),
+    Contact(phone_number="+13235550103", data={"first_name": "Bob", "district": "District 12"}),
+    Contact(phone_number="+13235550104", data={"first_name": "Carol", "district": "District 5"}),
 ]
 
 

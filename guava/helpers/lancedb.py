@@ -2,8 +2,7 @@ import logging
 import time
 import uuid
 
-from .embedding import EmbeddingModel
-from .vectorstore import VectorStore
+from .rag import EmbeddingModel, VectorStore
 
 logger = logging.getLogger("guava.helpers.rag")
 
@@ -20,6 +19,7 @@ class LanceDBStore(VectorStore):
     Example::
 
         from google import genai
+        from guava.helpers.vertexai import VertexAIEmbedding
         client = genai.Client(vertexai=True, project="my-project", location="us-central1")
         store = LanceDBStore("gs://my-bucket/lancedb", embedding_model=VertexAIEmbedding(client=client))
 
@@ -37,14 +37,14 @@ class LanceDBStore(VectorStore):
         embedding_model: EmbeddingModel,
     ):
         try:
-            import lancedb as _lancedb  # ty: ignore[unresolved-import]
+            import lancedb as _lancedb
         except ImportError:
             raise ImportError(
                 "lancedb is not installed. Run: pip install 'gridspace-guava[lancedb]'"
             ) from None
         self._embedding_model = embedding_model
         self._table_name = table_name
-        self._db = _lancedb.connect(path)
+        self._db = _lancedb.connect(path)  # ty: ignore[unresolved-attribute]
         self._table = None
         if table_name in self._db.table_names():
             table = self._db.open_table(table_name)

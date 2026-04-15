@@ -1,7 +1,6 @@
 import logging
 
-from .embedding import EmbeddingModel
-from .vectorstore import VectorStore
+from .rag import EmbeddingModel, VectorStore
 
 logger = logging.getLogger("guava.helpers.rag")
 
@@ -32,15 +31,15 @@ class ChromaVectorStore(VectorStore):
         embedding_model: EmbeddingModel | None = None,
     ):
         try:
-            import chromadb as _chromadb  # ty: ignore[unresolved-import]
+            import chromadb as _chromadb
         except ImportError:
             raise ImportError(
                 "chromadb is not installed. Run: pip install 'gridspace-guava[chromadb]'"
             ) from None
         if path is None:
-            self._db = _chromadb.Client()
+            self._db = _chromadb.Client()  # ty: ignore[unresolved-attribute]
         else:
-            self._db = _chromadb.PersistentClient(path=path)
+            self._db = _chromadb.PersistentClient(path=path)  # ty: ignore[unresolved-attribute]
         self._collection = self._db.get_or_create_collection(
             name=collection_name,
             metadata={"hnsw:space": "cosine"},

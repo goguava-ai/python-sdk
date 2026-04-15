@@ -2,14 +2,154 @@ import logging
 import os
 import time
 import warnings
+from abc import ABC, abstractmethod
 
 from guava.telemetry import telemetry_client
 
-from .chunking import chunk_document
-from .generation import GenerationModel
-from .vectorstore import VectorStore
-
 logger = logging.getLogger("guava.helpers.rag")
+
+
+# ── VectorStore ────────────────────────────────────────────────────────────────
+
+
+class VectorStore(ABC):
+    """Abstract base class for vector stores used in Guava RAG helpers.
+
+    Implementations handle embedding internally — callers pass plain text
+    and get plain text back. This keeps the DocumentQA interface simple
+    and lets each backend choose its own embedding strategy.
+    """
+
+    @abstractmethod
+    def add_texts(self, texts: list[str]) -> list[str]:
+        """Embed and store text chunks. Returns a list of IDs, one per chunk.
+
+        IDs are opaque strings assigned by the store. Pass them to delete()
+        to remove specific chunks later (e.g. when a source article changes).
+        May be called multiple times; each call appends to the existing store.
+        """
+        ...
+
+    @abstractmethod
+    def upsert_texts(self, ids: list[str], texts: list[str]) -> None:
+        """Add or replace text chunks by caller-provided IDs.
+
+        If a chunk with a given ID already exists, it is replaced (re-embedded
+        and overwritten). Otherwise it is inserted as new. This is the
+        preferred method for incremental updates where the caller controls
+        chunk identity.
+        """
+        ...
+
+    @abstractmethod
+    def delete(self, ids: list[str]) -> None:
+        """Delete chunks by the IDs returned from add_texts or upsert_texts."""
+        ...
+
+    @abstractmethod
+    def search(self, query: str, k: int = 5) -> list[str]:
+        """Return the top-k most relevant text chunks for the query."""
+        ...
+
+    @abstractmethod
+    def clear(self) -> None:
+        """Remove all stored data."""
+        ...
+
+    @abstractmethod
+    def count(self) -> int:
+        """Return the number of stored chunks."""
+        ...
+
+
+# ── EmbeddingModel ─────────────────────────────────────────────────────────────
+
+
+class EmbeddingModel(ABC):
+    """Abstract base class for embedding models used in Guava RAG helpers.
+
+    Subclass and implement ``embed()`` and ``ndims()``. Optionally override
+    ``embed_documents()`` and ``embed_query()`` to use task-specific behaviour
+    (e.g. different task types for Vertex AI, different input types for Pinecone).
+    """
+
+    @abstractmethod
+    def ndims(self) -> int:
+        """Return the dimensionality of the produced embedding vectors."""
+        ...
+
+    @abstractmethod
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        """Embed a batch of texts into vectors."""
+        ...
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        """Embed texts for document indexing. Defaults to ``embed()``."""
+        return self.embed(texts)
+
+    def embed_query(self, text: str) -> list[float]:
+        """Embed a single query for search. Defaults to ``embed([text])[0]``."""
+        return self.embed([text])[0]
+
+
+# ── GenerationModel ────────────────────────────────────────────────────────────
+
+
+class GenerationModel(ABC):
+    """Abstract base class for QA generation models used in Guava RAG helpers.
+
+    Subclass and implement ``generate()``.
+    """
+
+    @abstractmethod
+    def generate(self, prompt: str, *, system_instruction: str | None = None) -> str:
+        """Generate a response for the given prompt.
+
+        Args:
+            prompt: The user prompt (e.g. context + question).
+            system_instruction: Optional system-level instruction.
+        """
+        ...
+
+
+# ── chunk_document ─────────────────────────────────────────────────────────────
+
+
+def chunk_document(document: str, chunk_size: int = 5000, overlap: int = 200) -> list[str]:
+    """Split a document into overlapping chunks on paragraph boundaries.
+
+    Paragraphs are grouped until *chunk_size* characters are reached, then
+    a new chunk begins. When *overlap* > 0, the last paragraph of each chunk
+    is carried over to the next chunk to preserve cross-boundary context.
+    """
+    paragraphs = [p.strip() for p in document.split("\n\n") if p.strip()]
+
+    chunks: list[str] = []
+    current_chunk: list[str] = []
+    current_length = 0
+
+    for paragraph in paragraphs:
+        paragraph_length = len(paragraph)
+        if current_length + paragraph_length > chunk_size and current_chunk:
+            chunks.append("\n\n".join(current_chunk))
+            # Carry the last paragraph into the next chunk for overlap
+            if overlap > 0 and current_chunk:
+                last = current_chunk[-1]
+                current_chunk = [last]
+                current_length = len(last)
+            else:
+                current_chunk = []
+                current_length = 0
+        current_chunk.append(paragraph)
+        current_length += paragraph_length
+
+    if current_chunk:
+        chunks.append("\n\n".join(current_chunk))
+
+    return chunks
+
+
+# ── DocumentQA ─────────────────────────────────────────────────────────────────
 
 _DEFAULT_INSTRUCTIONS = (
     "You are a virtual agent. Your task is to answer questions using "
@@ -20,7 +160,7 @@ _DEFAULT_INSTRUCTIONS = (
 
 
 def _default_server_rag(namespace=None):
-    from .server_rag import ServerRAG
+    from guava.helpers.server_rag import ServerRAG
     from guava.utils import get_base_url
 
     return ServerRAG(
@@ -71,7 +211,8 @@ class DocumentQA:
     Example (local mode)::
 
         from google import genai
-        from guava.helpers.rag import LanceDBStore, VertexAIEmbedding, VertexAIGeneration
+        from guava.helpers.lancedb import LanceDBStore
+        from guava.helpers.vertexai import VertexAIEmbedding, VertexAIGeneration
 
         client = genai.Client(vertexai=True, project="my-project", location="us-central1")
         store = LanceDBStore("gs://my-bucket/lancedb", embedding_model=VertexAIEmbedding(client=client))

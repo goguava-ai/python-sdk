@@ -1,6 +1,6 @@
 [project]
-name = "gridspace-guava"
-version = "0.18.0"
+name = "guava-sdk"
+version = "0.20.0"
 description = "The official Python SDK for building Guava voice agents."
 readme = "README.md"
 requires-python = ">=3.10"

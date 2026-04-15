@@ -1,4 +1,6 @@
 # Guava Python SDK
+[![PyPI - Version](https://img.shields.io/pypi/v/guava-sdk)](https://pypi.org/project/guava-sdk/)
+
 
 ## Documentation
 
@@ -7,22 +9,12 @@ Full documentation for the Python SDK can be found at [https://docs.goguava.ai/]
 
 ## Installation
 
-Install the Python SDK using your preferred package manager.
+Install the SDK using your preferred package manager.
 
-*Method 1: pip*
 ```bash
-$ pip install gridspace-guava --extra-index-url https://guava-pypi.gridspace.com
-```
-
-*Method 2: uv astral*
-```bash
-$ uv add gridspace-guava --index guava=https://guava-pypi.gridspace.com
-```
-
-*Method 3: poetry*
-```bash
-$ poetry source add --priority=explicit guava https://guava-pypi.gridspace.com
-$ poetry add --source guava gridspace-guava
+$ pip install guava-sdk
+$ uv add guava-sdk
+$ poetry add guava-sdk
 ```
 
 ## Running an Example

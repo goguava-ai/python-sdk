@@ -167,7 +167,7 @@ class CallController:
         self,
         objective: str = "",
         checklist: Optional[list[Union[Field, Say, str]]] = None,
-        success_criteria: Optional[str] = "",
+        completion_criteria: Optional[str] = "",
         on_complete: Callable = lambda: None,
         **on_complete_kwargs,
     ):
@@ -203,7 +203,7 @@ class CallController:
                 task_id=self._current_task_id,
                 objective=objective,
                 action_items=action_items,
-                success_criteria=success_criteria,
+                success_criteria=completion_criteria,
             )
         )
 

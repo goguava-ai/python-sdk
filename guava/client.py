@@ -18,7 +18,7 @@ from .commands import (
     Command,
 )
 
-from typing import Optional, TypeVar, Type, Callable, Any
+from typing import Optional, TypeVar, Type, Callable, Any, TYPE_CHECKING
 from urllib.parse import urljoin, urlencode
 from .call_controller import CallController, CommandQueueEnd
 
@@ -26,15 +26,18 @@ from importlib.metadata import version, PackageNotFoundError
 from .threading_utils import FirstEntry
 
 from guava.socket.client import GuavaSocket, GuavaSocketClosedError
-from . import listen_inbound, guavadialer_events, outbound_campaigns
+from . import listen_inbound, guavadialer_events
 from .utils import get_base_url, check_exactly_one, deprecated, check_response, preview
 from .telemetry import telemetry_client
 from guava.types.call_info import CallInfo, PSTNCallInfo
 from datetime import timedelta
 
+if TYPE_CHECKING:
+    from . import campaigns
+
 SDK_NAME = "python-sdk"
 try:
-    __version__ = version("gridspace-guava")
+    __version__ = version("guava-sdk")
 except PackageNotFoundError:
     __version__ = "0+unknown"
 
@@ -156,6 +159,7 @@ class Client:
             }
         ))
         call_id = response.json()["call_id"]
+        logger.info("Outbound call created with session ID: %s", call_id)
         self._attach_to_call(call_id, call_controller)
 
     @preview("Terminal Calling")
@@ -276,7 +280,7 @@ class Client:
                     case listen_inbound.IncomingCall():
                         gs.send(listen_inbound.ClaimCall(call_id=server_message.call_id))
                     case listen_inbound.AssignCall():
-                        logger.info("Received call %r", server_message.call_info)
+                        logger.info("Received call (session ID: %s), info: %r", server_message.call_id, server_message.call_info)
                         try:
                             if controller_class:
                                 call_controller = controller_class()
@@ -302,7 +306,7 @@ class Client:
     def serve_campaign(
         self,
         *,
-        campaign: "outbound_campaigns.OutboundCampaign",
+        campaign: "campaigns.OutboundCampaign",
         controller: Type[U],
     ):
         init_timeout: float = 5.0

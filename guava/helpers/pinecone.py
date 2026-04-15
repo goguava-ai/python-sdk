@@ -1,10 +1,49 @@
 import logging
 import uuid
 
-from .embedding import EmbeddingModel, PineconeInferenceEmbedding
-from .vectorstore import VectorStore
+from .rag import EmbeddingModel, VectorStore
 
 logger = logging.getLogger("guava.helpers.rag")
+
+
+class PineconeInferenceEmbedding(EmbeddingModel):
+    """Embedding via Pinecone's hosted Inference API.
+
+    Uses different input types for document indexing vs. query search.
+    No additional API key required beyond the Pinecone API key.
+
+    Args:
+        pc: A ``Pinecone`` client instance.
+        model: Pinecone inference model name.
+        dimensionality: Output vector size.
+    """
+
+    def __init__(self, pc, model: str = "multilingual-e5-large", dimensionality: int = 1024):
+        self._pc = pc
+        self._model = model
+        self._dimensionality = dimensionality
+
+    def ndims(self) -> int:
+        return self._dimensionality
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        return self.embed_documents(texts)
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        response = self._pc.inference.embed(
+            model=self._model,
+            inputs=texts,
+            parameters={"input_type": "passage", "truncate": "END"},
+        )
+        return [e["values"] for e in response]
+
+    def embed_query(self, text: str) -> list[float]:
+        response = self._pc.inference.embed(
+            model=self._model,
+            inputs=[text],
+            parameters={"input_type": "query", "truncate": "END"},
+        )
+        return response[0]["values"]
 
 
 class PineconeVectorStore(VectorStore):

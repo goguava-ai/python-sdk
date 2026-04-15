@@ -29,9 +29,12 @@ class Field(BaseModel):
     # multiple choice
     choices: list[str] = PydanticField(default_factory=list)
     choice_generator: Optional[ChoiceGeneratorFunction] = None
+    searchable: bool = False
 
     @model_validator(mode="after")
     def validate_choices(self):
+        if self.field_type == 'datetime':
+            raise NotImplementedError("Datetime collection is not yet implemented.")
         if self.field_type == 'calendar_slot':
             print("NOTE: For calendar_slot, choices / choice_generator must return ISO-8601 formatted datetimes: YYYY-MM-ddTHH:mm")
             if self.choices:

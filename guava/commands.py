@@ -1,5 +1,5 @@
 from typing import Optional, Literal, Union, Annotated
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, model_validator, JsonValue
 from .types import E164PhoneNumber, ActionItem, Language
 
 class StartOutboundCallCommand(BaseModel):
@@ -93,6 +93,11 @@ class ChoiceResultCommand(BaseModel):
     matched_choices: list[str]
     other_choices: list[str]
 
+class SetVariableCommand(BaseModel):
+    command_type: Literal["set-variable"] = 'set-variable'
+    key: str
+    value: JsonValue
+
 Command = Annotated[
     Union[
         StartOutboundCallCommand,
@@ -110,6 +115,7 @@ Command = Annotated[
         TransferCommand,
         ChoiceResultCommand,
         SetLanguageMode,
+        SetVariableCommand,
     ],
     Field(discriminator="command_type"),
 ]

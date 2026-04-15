@@ -761,3 +761,44 @@ or would like further assistance, I’m happy to help.
 For medical or billing matters requiring direct staff support,
 you may also contact our office at 212-743-8729.
 """
+
+FURNITURE_RETAILER_QA = """
+CLEARFIELD HOME & LIVING — HELP DESK Q&A DOCUMENT
+==================================================
+ 
+Q: What are your store hours?
+A: Most Clearfield locations are open Monday–Saturday, 10 AM–8 PM, and Sunday, 11 AM–6 PM. Hours may vary by location and on holidays. Customers can check the store locator on the website for exact hours.
+ 
+Q: How long does delivery take?
+A: Standard delivery is 5–10 business days. Express delivery (available in select areas) is 2–3 business days. Furniture and large appliances require a scheduled delivery window.
+ 
+Q: Can I track my order?
+A: Yes. Customers can track their order at clearfieldhome.com/track using their order number and the email address used at checkout. A tracking link is also sent once the order ships.
+ 
+Q: Can I change or cancel my order?
+A: Orders can be modified or cancelled within 24 hours of placement at no charge. After 24 hours, a restocking fee may apply if the item has already been processed for shipment.
+ 
+Q: What is your return policy?
+A: Items can be returned within 30 days of delivery in original condition with receipt. Mattresses, custom/special-order furniture, and final-sale items are non-returnable.
+ 
+Q: What do I do if my item arrived damaged?
+A: Customers should photograph the damage and contact Clearfield within 48 hours of delivery. Clearfield will arrange a replacement, repair, or refund depending on the situation.
+ 
+Q: Do you offer assembly or installation services?
+A: Yes. White-glove delivery with in-home assembly is available for most furniture and large appliances for an additional fee. It can be added at checkout or when scheduling delivery.
+ 
+Q: How does the warranty work?
+A: All Clearfield products include a 1-year limited warranty covering manufacturing defects. Extended 2- or 5-year warranties are available for purchase. Normal wear, accidental damage, and misuse are not covered.
+ 
+Q: Do you offer financing?
+A: Yes. Clearfield offers financing through ClearPay with 6, 12, and 24-month plans. Customers can apply online or in-store, subject to credit approval.
+ 
+Q: How do I earn and redeem rewards points?
+A: Rewards members earn 1 point per $1 spent. Every 100 points = $5 off at checkout. Points expire after 12 months of account inactivity.
+ 
+Q: Do you offer price matching?
+A: Yes. Clearfield matches a competitor's current advertised price on an identical in-stock item within 14 days of purchase. Proof of price is required. Excludes auction sites, wholesale clubs, and marketplace sellers.
+ 
+Q: Can businesses place bulk orders?
+A: Yes. Clearfield supports bulk purchases and interior design partnerships through corporate accounts.
+"""
