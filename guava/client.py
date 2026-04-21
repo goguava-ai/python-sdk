@@ -27,7 +27,7 @@ from .threading_utils import FirstEntry
 
 from guava.socket.client import GuavaSocket, GuavaSocketClosedError
 from . import listen_inbound, guavadialer_events
-from .utils import get_base_url, check_exactly_one, deprecated, check_response, preview
+from .utils import get_base_url, check_exactly_one, check_response, preview
 from .telemetry import telemetry_client
 from guava.types.call_info import CallInfo, PSTNCallInfo
 from datetime import timedelta
@@ -127,18 +127,6 @@ class Client:
         r = httpx.post(self.get_http_url("v1/sip-agents"), headers=self._get_headers())
         check_response(r)
         return r.json()['sip_code']
-    
-    @deprecated("Inbound Handlers")
-    def set_inbound_handler(self, agent_number, public_url, inbound_token):
-        r = httpx.put(
-            self.get_http_url(f"v1/inbound-handler/{agent_number}"),
-            headers=self._get_headers(),
-            json={
-                'handler_url': public_url,
-                'handler_token': inbound_token
-            }
-        )
-        check_response(r)
 
     def create_outbound(
         self,

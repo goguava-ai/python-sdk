@@ -113,4 +113,4 @@ if __name__ == "__main__":
     )
     logger.info("Contact upload result: %s", result)
 
-    agent.outbound_campaign(campaign=campaign).run()
+    agent.attach_campaign(campaign=campaign)

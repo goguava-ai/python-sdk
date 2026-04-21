@@ -203,7 +203,7 @@ class CallController:
                 task_id=self._current_task_id,
                 objective=objective,
                 action_items=action_items,
-                success_criteria=completion_criteria,
+                completion_criteria=completion_criteria,
             )
         )
 
@@ -350,6 +350,10 @@ class CallController:
             logger.warning("Unhandled event: %r", event)
 
     def get_field(self, field_key: str, default: Any = None) -> Any:
+        """
+        Use get_field() to retrieve field values by their key.
+        Can be called at any time, but most commonly as part of a Task's on_complete callback.
+        """
         return self._field_values.get(field_key, default)
 
     def has_field(self, field_key: str):

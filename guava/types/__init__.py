@@ -21,14 +21,34 @@ ChoiceGeneratorFunction = Callable[[str], tuple[list[str], list[str]]]
 
 class Field(BaseModel):
     item_type: Literal["field"] = 'field'
+
+    # The key for this collection. This key can be used later with get_field() to retreive the value.
     key: str
+
+    # Natural-language instruction to the LLM about how to collect this value.
+    # Use when you do not particularly care how the agent phrases its question.
     description: str = ''
+
+    # Encourages the agent to ask for the field in a particular way. Use instead
+    # of description when you want more control over the phrasing.
     question: str = ''
+
+    # Controls parsing and validation. "calendar_slot" and "multiple_choice"
+    # require either choices or choice_generator.
     field_type: FieldTypes = 'text'
+
+    # If False, the agent can skip this field if the caller is unwilling to provide it.
     required: bool = True
-    # multiple choice
+
+    # Static list of valid options for "calendar_slot" and "multiple_choice"
+    # fields. Use when the list is small. Large lists should use choice_generator.
     choices: list[str] = PydanticField(default_factory=list)
+
+    # Takes a query string and returns (matching, fallback) lists. Use for large
+    # or dynamic option sets with "calendar_slot" and "multiple_choice".
     choice_generator: Optional[ChoiceGeneratorFunction] = None
+
+    # Preview feature. Don't document yet.
     searchable: bool = False
 
     @model_validator(mode="after")

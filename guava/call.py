@@ -1,3 +1,4 @@
+import json
 import logging
 import queue
 
@@ -8,12 +9,16 @@ from .commands import (
     SetPersona,
     SendInstructionCommand,
     TransferCommand,
-    SetVariableCommand
+    RetryTaskCommand,
+    SetVariableCommand,
+    SetLanguageMode,
+    ReadScriptCommand,
 )
 from . import types
 from .types import Field, Say
 
 from typing import Optional, Union, Any
+from guava.types import Language
 from guava.telemetry import telemetry_client
 from guava.call_controller import CommandQueueEnd
 from guava.utils import is_jsonable
@@ -57,6 +62,18 @@ class Call:
     def get_variable(self, key: str, default: Any = None) -> Any:
         return self._variables.get(key, default)
 
+    def set_language_mode(
+            self,
+            primary: Language = "english",
+            secondary: Optional[list[Language]] = None,
+    ):
+        self.send_command(
+            SetLanguageMode(
+                primary=primary,
+                secondary=secondary or [],
+            )
+        )
+
     def set_persona(
             self,
             organization_name: Optional[str] = None,
@@ -79,6 +96,9 @@ class Call:
 
     def get_field(self, field_key: str, default: Any = None) -> Any:
         return self._field_values.get(field_key, default)
+
+    def has_field(self, field_key: str) -> bool:
+        return field_key in self._field_values
 
     def transfer(self, destination: str, instructions: str | None = None):
         # TODO: Verify that destination is a phone number or SIP address.
@@ -127,9 +147,18 @@ class Call:
                 task_id=task_id,
                 objective=objective,
                 action_items=action_items,
-                success_criteria=completion_criteria,
+                completion_criteria=completion_criteria,
             )
         )
+
+    def retry_task(self, reason: str):
+        self.send_command(RetryTaskCommand(reason=reason))
+
+    def read_script(self, script: str):
+        self.send_command(ReadScriptCommand(script=script))
+
+    def add_info(self, label: str, info: Any):
+        self.send_instruction(f"Here is some information about the following topic {label}:\n{json.dumps(info, indent=2)}")
 
     def send_instruction(self, instruction: str):
         self.send_command(SendInstructionCommand(instruction=instruction))

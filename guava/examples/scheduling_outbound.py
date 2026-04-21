@@ -1,58 +1,56 @@
-import guava
+import logging
 import os
-from guava.examples.mock_appointments import MOCK_APPOINTMENTS
-from guava.helpers.openai import DatetimeFilter
 import argparse
-from guava import logging_utils
-from typing_extensions import override
+import guava
 
-selected_time = None
+from guava import logging_utils, Agent
+from guava.examples.example_data import MOCK_APPOINTMENTS
+from guava.helpers.openai import DatetimeFilter
+
+logger = logging.getLogger("guava.examples.property_insurance")
+
+agent = Agent(
+    organization="Bright Smile Dental",
+    purpose="Call patients to help them scehdule a dental appointment.",
+)
+datetime_filter = DatetimeFilter(source_list=MOCK_APPOINTMENTS)
 
 
-class SchedulingController(guava.CallController):
-    def __init__(self, patient_name):
-        super().__init__()
-        self.datetime_filter = DatetimeFilter(source_list=MOCK_APPOINTMENTS)
-        self._intended_recipient = patient_name
-        self.set_persona(
-            organization_name="Bright Smile Dental",
-            agent_name="Grace",
-            agent_purpose=f"You are calling {self._intended_recipient} to help them schedule a dental appointment",
-        )
-        self.reach_person(
-            contact_full_name=self._intended_recipient,
-            on_success=self.schedule_recipient,
-            on_failure=self.recipient_unavailable,
-        )
+@agent.on_call_start
+def on_call_start(call: guava.Call):
+    call.reach_person(
+        contact_full_name=call.get_variable("patient_name"),
+    )
 
-    def schedule_recipient(self):
-        self.set_task(
+
+@agent.on_reach_person
+def on_reach_person(call: guava.Call, outcome: str) -> None:
+    if outcome == "unavailable":
+        call.hangup("Apologize for your mistake and hang up the call.")
+    elif outcome == "available":
+        call.set_task(
+            "schedule_appointment",
             checklist=[
-                guava.Say("Let me look to see what appointment times we have available."),
+                "Tell them that it's been a while since their regular cleaning with Dr. Teeth.",
                 guava.Field(
                     key="appointment_time",
                     field_type="calendar_slot",
                     description="Find a time that works for the caller",
-                    choice_generator=self.appointment_time_filter,
+                    searchable=True,
                 ),
-                guava.Say("Your appointment has been confirmed! Have a nice day."),
+                "Tell them their appointment has been confirmed and answer any questions before ending the call.",
             ],
-            on_complete=self.end_call,
         )
 
-    def appointment_time_filter(self, query: str):
-        return self.datetime_filter.filter(query, max_results=3)
 
-    def end_call(self):
-        self.hangup(final_instructions="Thank them for their time and hang up the call.")
+@agent.on_search_query("appointment_time")
+def search_appointments(call: guava.Call, query: str):
+    return datetime_filter.filter(query, max_results=3)
 
-    def recipient_unavailable(self):
-        self.hangup(final_instructions="Apologize for your mistake and hang up the call.")
 
-    @override
-    def on_session_done(self):
-        global selected_time
-        selected_time = self.get_field("appointment_time")
+@agent.on_task_complete("schedule_appointment")
+def on_appointment_scheduled(call: guava.Call):
+    call.hangup("Thank them for their time and hang up the call.")
 
 
 if __name__ == "__main__":
@@ -63,15 +61,8 @@ if __name__ == "__main__":
     parser.add_argument("name", nargs="?", help="Name of the patient", default="Benjamin Buttons")
     args = parser.parse_args()
 
-    client = guava.Client()
-    client.create_outbound(
+    agent.call_phone(
         from_number=os.environ["GUAVA_AGENT_NUMBER"],
         to_number=args.phone,
-        call_controller=SchedulingController(patient_name=args.name),
+        variables={"patient_name": args.name},
     )
-    if selected_time:
-        client.send_sms(
-            from_number=os.environ["GUAVA_AGENT_NUMBER"],
-            to_number=args.phone,
-            message=f"Your appointment has been confirmed for {selected_time}",
-        )

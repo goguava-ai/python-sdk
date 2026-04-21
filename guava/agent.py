@@ -5,7 +5,6 @@ import httpx
 import time
 
 from typing import Callable, overload, Optional, Any
-from typing_extensions import Self
 from .telemetry import telemetry_client
 from guava.types.call_info import CallInfo
 from guava.types.incoming_call_action import IncomingCallAction, AcceptCall, DeclineCall
@@ -18,6 +17,7 @@ from guava.call import Call
 from .utils import check_response, is_jsonable
 from guava import campaigns, guavadialer_events
 from pydantic import BaseModel
+from functools import partial
 
 from .events import (
     Event,
@@ -80,8 +80,6 @@ class Agent:
         self._on_session_end: Optional[Callable[[Call], None]] = None
         self._on_outbound_failed: Optional[Callable[[OutboundCallFailed], None]] = None
 
-        self._threads: list[threading.Thread] = []
-
     @overload
     def on_call_received(self, fn: Callable[[CallInfo], IncomingCallAction], /) -> Callable[[CallInfo], IncomingCallAction]: ...
     @overload
@@ -116,6 +114,22 @@ class Agent:
         return self._register("_on_call_start", fn)
 
     @overload
+    def on_caller_speech(self, fn: Callable[[Call, CallerSpeechEvent], None], /) -> Callable[[Call, CallerSpeechEvent], None]: ...
+    @overload
+    def on_caller_speech(self) -> Callable[[Callable[[Call, CallerSpeechEvent], None]], Callable[[Call, CallerSpeechEvent], None]]: ...
+
+    def on_caller_speech(self, fn=None):
+        return self._register("_on_caller_speech", fn)
+
+    @overload
+    def on_agent_speech(self, fn: Callable[[Call, AgentSpeechEvent], None], /) -> Callable[[Call, AgentSpeechEvent], None]: ...
+    @overload
+    def on_agent_speech(self) -> Callable[[Callable[[Call, AgentSpeechEvent], None]], Callable[[Call, AgentSpeechEvent], None]]: ...
+
+    def on_agent_speech(self, fn=None):
+        return self._register("_on_agent_speech", fn)
+
+    @overload
     def on_task_complete(self, fn: Callable[[Call, str], None], /) -> Callable[[Call, str], None]: ...
     @overload
     def on_task_complete(self) -> Callable[[Callable[[Call, str], None]], Callable[[Call, str], None]]: ...
@@ -131,11 +145,11 @@ class Agent:
         return self._register("_on_question", fn)
 
     @overload
-    def on_action_requested(self, fn: Callable[[Call, str], SuggestedAction | None], /) -> Callable[[Call, str], SuggestedAction | None]: ...
+    def on_action_request(self, fn: Callable[[Call, str], SuggestedAction | None], /) -> Callable[[Call, str], SuggestedAction | None]: ...
     @overload
-    def on_action_requested(self) -> Callable[[Callable[[Call, str], SuggestedAction | None]], Callable[[Call, str], SuggestedAction | None]]: ...
+    def on_action_request(self) -> Callable[[Callable[[Call, str], SuggestedAction | None]], Callable[[Call, str], SuggestedAction | None]]: ...
 
-    def on_action_requested(self, fn=None):
+    def on_action_request(self, fn=None):
         return self._register("_on_action_requested", fn)
 
     @overload
@@ -236,6 +250,97 @@ class Agent:
             return decorator
         
 
+    def _dispatch_event(self, call: Call, event: Event) -> None:
+        match event:
+            case CallerSpeechEvent():
+                if self._on_caller_speech:
+                    self._on_caller_speech(call, event)
+            case AgentSpeechEvent():
+                if self._on_agent_speech:
+                    self._on_agent_speech(call, event)
+            case TaskCompletedEvent():
+                logger.info("Task %s completed.", event.task_id)
+                if self._on_task_complete_generic is not None:
+                    self._on_task_complete_generic(call, event.task_id)
+                elif event.task_id in self._on_task_complete_handlers:
+                    self._on_task_complete_handlers[event.task_id](call)
+                else:
+                    logger.warning("No handler registered for completion of task '%s'", event.task_id)
+            case AgentQuestionEvent():
+                if self._on_question is not None:
+                    try:
+                        logger.info("Received question from bot: %s", event.question)
+                        answer = self._on_question(call, event.question)
+                        call.send_command(AnswerQuestionCommand(question_id=event.question_id, answer=answer))
+                    except Exception:
+                        logger.exception("Error occurred while answering question.")
+                        call.send_command(AnswerQuestionCommand(question_id=event.question_id, answer="An error occurred and the question could not be answered."))
+                else:
+                    logger.warning("Received question but no on_question handler is registered: %s", event.question)
+                    call.send_command(AnswerQuestionCommand(question_id=event.question_id, answer="I don't have an answer to that question."))
+            case ActionRequestEvent():
+                logger.info("Received action request %s: %s", event.intent_id, event.intent_summary)
+                if self._on_action_requested is not None:
+                    suggestion = self._on_action_requested(call, event.intent_summary)
+                    if suggestion is not None:
+                        call.send_command(ActionSuggestionCommand(
+                            intent_id=event.intent_id,
+                            action_key=suggestion.key,
+                            action_description=suggestion.description or "",
+                        ))
+                    else:
+                        call.send_command(ActionSuggestionCommand(intent_id=event.intent_id, action_key=None))
+                else:
+                    call.send_command(ActionSuggestionCommand(intent_id=event.intent_id, action_key=None))
+            case ActionItemCompletedEvent():
+                call._field_values[event.key] = event.payload
+                if event.key and event.payload:
+                    logger.info("Field %s updated with value: %r", event.key, event.payload)
+            case ExecuteActionEvent():
+                logger.info("Executing action '%s'", event.action_key)
+                on_action_func = None
+                if self._on_action_generic is not None:
+                    on_action_func = partial(self._on_action_generic, call, event.action_key)
+                elif event.action_key in self._on_action_handlers:
+                    on_action_func = partial(self._on_action_handlers[event.action_key], call)
+                if on_action_func:
+                    response = on_action_func()
+                    if response:
+                        logger.info("Action execution request (%s) responded with: %s", event.action_key, response)
+                        call.send_instruction(f"Responding to action execution {event.action_key}: {response}")
+                else:
+                    logger.warning("No handler registered for action '%s'", event.action_key)
+            case BotSessionEnded():
+                logger.info("Session ended: %s", event.termination_reason)
+                if self._on_session_end is not None:
+                    self._on_session_end(call)
+            case OutboundCallFailed():
+                logger.error("Outbound call failed: %s", event.error_reason)
+                if self._on_outbound_failed is not None:
+                    self._on_outbound_failed(event)
+            case ErrorEvent():
+                logger.error("Received error event: %s", event.content)
+            case WarningEvent():
+                logger.warning("Received warning event: %s", event.content)
+            case OutboundCallConnected():
+                # No handler for this yet.
+                pass
+            case ChoiceQueryEvent():
+                logger.info("Received search query for field '%s': %s", event.field_key, event.query)
+                handler = self._search_query_handlers.get(event.field_key)
+                if handler is None:
+                    logger.warning("Search query arrived for field '%s' with no handler attached.", event.field_key)
+                else:
+                    choices, other_choices = handler(call, event.query)
+                    call.send_command(ChoiceResultCommand(
+                        field_key=event.field_key,
+                        query_id=event.query_id,
+                        matched_choices=choices,
+                        other_choices=other_choices,
+                    ))
+            case _:
+                logger.warning("Received unexpected event: %r", event)
+
     def _attach_to_call(self, call_id: str, initial_variables: dict = {}, route="v2/connect-call"):
         """Attach a call controller to a given call ID."""
         try:
@@ -285,129 +390,32 @@ class Agent:
                 # Receive and dispatch events on the main thread.
                 while gs.is_open():
                     event = gs.recv()
-                    
+
                     if event is None:
                         continue
-                    
-                    match event:
-                        case CallerSpeechEvent():
-                            if self._on_caller_speech:
-                                self._on_caller_speech(call, event)
-                        case AgentSpeechEvent():
-                            if self._on_agent_speech:
-                                self._on_agent_speech(call, event)
-                        case TaskCompletedEvent():
-                            logger.info("Task %s completed.", event.task_id)
-                            if self._on_task_complete_generic is not None:
-                                self._on_task_complete_generic(call, event.task_id)
-                            elif event.task_id in self._on_task_complete_handlers:
-                                self._on_task_complete_handlers[event.task_id](call)
-                            else:
-                                logger.warning("No handler registered for completion of task '%s'", event.task_id)
-                        case AgentQuestionEvent():
-                            if self._on_question is not None:
-                                try:
-                                    logger.info("Received question from bot: %s", event.question)
-                                    answer = self._on_question(call, event.question)
-                                    call.send_command(AnswerQuestionCommand(question_id=event.question_id, answer=answer))
-                                except Exception:
-                                    logger.exception("Error occurred while answering question.")
-                                    call.send_command(AnswerQuestionCommand(question_id=event.question_id, answer="An error occurred and the question could not be answered."))
-                            else:
-                                logger.warning("Received question but no on_question handler is registered: %s", event.question)
-                                call.send_command(AnswerQuestionCommand(question_id=event.question_id, answer="I don't have an answer to that question."))
-                        case ActionRequestEvent():
-                            logger.info("Received action request %s: %s", event.intent_id, event.intent_summary)
-                            if self._on_action_requested is not None:
-                                suggestion = self._on_action_requested(call, event.intent_summary)
-                                if suggestion is not None:
-                                    call.send_command(ActionSuggestionCommand(
-                                        intent_id=event.intent_id,
-                                        action_key=suggestion.key,
-                                        action_description=suggestion.description or "",
-                                    ))
-                                else:
-                                    call.send_command(ActionSuggestionCommand(intent_id=event.intent_id, action_key=None))
-                            else:
-                                call.send_command(ActionSuggestionCommand(intent_id=event.intent_id, action_key=None))
-                        case ActionItemCompletedEvent():
-                            call._field_values[event.key] = event.payload
-                            if event.key and event.payload:
-                                logger.info("Field %s updated with value: %r", event.key, event.payload)
-                        case ExecuteActionEvent():
-                            logger.info("Executing action '%s'", event.action_key)
-                            if self._on_action_generic is not None:
-                                self._on_action_generic(call, event.action_key)
-                            elif event.action_key in self._on_action_handlers:
-                                self._on_action_handlers[event.action_key](call)
-                            else:
-                                logger.warning("No handler registered for action '%s'", event.action_key)
-                        case BotSessionEnded():
-                            logger.info("Session ended: %s", event.termination_reason)
-                            if self._on_session_end is not None:
-                                self._on_session_end(call)
-                            break
-                        case OutboundCallFailed():
-                            logger.error("Outbound call failed: %s", event.error_reason)
-                            if self._on_outbound_failed is not None:
-                                self._on_outbound_failed(event)
-                            break
-                        case ErrorEvent():
-                            logger.error("Received error event: %s", event.content)
-                        case WarningEvent():
-                            logger.warning("Received warning event: %s", event.content)
-                        case OutboundCallConnected():
-                            # No handler for this yet.
-                            pass
-                        case ChoiceQueryEvent():
-                            logger.info("Received search query for field '%s': %s", event.field_key, event.query)
-                            handler = self._search_query_handlers.get(event.field_key)
-                            if handler is None:
-                                logger.warning("Search query arrived for field '%s' with no handler attached.", event.field_key)
-                            else:
-                                choices, other_choices = handler(call, event.query)
-                                call.send_command(ChoiceResultCommand(
-                                    field_key=event.field_key,
-                                    query_id=event.query_id,
-                                    matched_choices=choices,
-                                    other_choices=other_choices,
-                                ))
-                        case _:
-                            logger.warning("Received unexpected event: %r", event)
+
+                    self._dispatch_event(call, event)
+
+                    if isinstance(event, (BotSessionEnded, OutboundCallFailed)):
+                        break
         finally:
             call._shutdown_queue()
             if command_thread:
                 command_thread.join()
     
-    def inbound_phone(self, agent_number: str) -> Self:
-        self._threads.append(
-            threading.Thread(target=self._listen_inbound, kwargs={
-                "agent_number": agent_number
-            }, daemon=True)
-        )
-        return self
-    
-    def inbound_webrtc(self, webrtc_code: str | None = None) -> Self:
+    def listen_phone(self, agent_number: str) -> None:
+        self._listen_inbound(agent_number=agent_number)
+
+    def listen_webrtc(self, webrtc_code: str | None = None) -> None:
         if not webrtc_code:
             logger.info("No WebRTC code provided. Creating a temporary one.")
             webrtc_code = self._client.create_webrtc_agent(ttl=timedelta(hours=1))
+        self._listen_inbound(webrtc_code=webrtc_code)
 
-        self._threads.append(
-            threading.Thread(target=self._listen_inbound, kwargs={
-                "webrtc_code": webrtc_code
-            }, daemon=True)
-        )
-        return self
-    
-    def inbound_sip(self, sip_code: str) -> Self:
-        self._threads.append(
-            threading.Thread(target=self._listen_inbound, kwargs={
-                "sip_code": sip_code
-            }, daemon=True)
-        )
-        return self
+    def listen_sip(self, sip_code: str) -> None:
+        self._listen_inbound(sip_code=sip_code)
 
-    def local_call(self) -> Self:
+    def call_local(self) -> None:
         import sys
         import importlib.util
 
@@ -425,22 +433,10 @@ class Agent:
         from .terminal_call import TerminalCall
         webrtc_code = self._client.create_webrtc_agent(ttl=timedelta(minutes=5))
 
-        self._threads.append(
-            threading.Thread(target=self._listen_inbound, kwargs={
-                "webrtc_code": webrtc_code
-            }, daemon=True)
-        )
-        self._threads.append(
-            threading.Thread(target=lambda: asyncio.run(TerminalCall(self._client, webrtc_code).start()), daemon=True)
-        )
-        return self
-
-    def run(self) -> None:
-        for t in self._threads:
-            t.start()
-
-        for t in self._threads:
-            t.join()
+        threading.Thread(target=self._listen_inbound, kwargs={
+            "webrtc_code": webrtc_code
+        }, daemon=True).start()
+        asyncio.run(TerminalCall(self._client, webrtc_code).start())
 
     def _listen_inbound(self, agent_number: str | None = None, webrtc_code: str | None = None, sip_code: str | None = None):
         if not check_exactly_one(agent_number, webrtc_code, sip_code):
@@ -494,28 +490,22 @@ class Agent:
                         except Exception:
                             logger.exception("Failed to initialize call controller.")
 
-    def outbound_phone(self, from_number, to_number, variables: dict[str, Any] = {}) -> Self:
+    def call_phone(self, from_number, to_number, variables: dict[str, Any] = {}) -> None:
         for key, val in variables.items():
             if not is_jsonable(val):
                 raise ValueError(f"Variable '{key}' value is not JSON serializable: {val!r}")
-            
-        def start_call():
-            response = check_response(httpx.post(
-                self._client.get_http_url("v2/create-outbound"),
-                headers=self._client._get_headers(),
-                params={
-                    "from_number": from_number,
-                    "to_number": to_number
-                }
-            ))
-            call_id = response.json()["call_id"]
-            logger.info("Outbound call created with session ID: %s", call_id)
-            self._attach_to_call(call_id, variables)
 
-        self._threads.append(
-            threading.Thread(target=start_call, daemon=True)
-        )
-        return self
+        response = check_response(httpx.post(
+            self._client.get_http_url("v2/create-outbound"),
+            headers=self._client._get_headers(),
+            params={
+                "from_number": from_number,
+                "to_number": to_number
+            }
+        ))
+        call_id = response.json()["call_id"]
+        logger.info("Outbound call created with session ID: %s", call_id)
+        self._attach_to_call(call_id, variables)
 
     def _serve_campaign(
         self,
@@ -581,12 +571,9 @@ class Agent:
         except GuavaSocketClosedError:
             logger.info("Campaign '%s' disconnected.", campaign.name)
 
-    def outbound_campaign(
+    def attach_campaign(
         self,
         *,
         campaign: campaigns.OutboundCampaign,
-    ) -> Self:
-        self._threads.append(
-            threading.Thread(target=self._serve_campaign, args=(campaign,), daemon=True)
-        )
-        return self
+    ) -> None:
+        self._serve_campaign(campaign)

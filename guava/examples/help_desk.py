@@ -35,8 +35,8 @@ def on_question(call: guava.Call, question: str) -> str:
     return answer
 
 
-@agent.on_action_requested
-def on_action_requested(call: guava.Call, request: str) -> SuggestedAction:
+@agent.on_action_request
+def on_action_request(call: guava.Call, request: str) -> SuggestedAction:
     return SuggestedAction(key=intent_recognizer.classify(request))
 
 
@@ -74,4 +74,4 @@ def other_request(call: guava.Call):
 
 if __name__ == "__main__":
     logging_utils.configure_logging()
-    agent.inbound_phone(os.environ["GUAVA_AGENT_NUMBER"]).run()
+    agent.listen_phone(os.environ["GUAVA_AGENT_NUMBER"])

@@ -1,11 +1,15 @@
+"""
+This is a simple restaurant waitlist example that shows you how to collect information
+from inbound callers through the use of `call.set_task(...)`
+"""
+
 import os
 import guava
 import argparse
 import logging
 
-from guava import Agent, Client
+from guava import Agent
 from guava import logging_utils
-from datetime import timedelta
 
 logger = logging.getLogger("thai_palace")
 
@@ -45,6 +49,7 @@ def on_call_start(call: guava.Call) -> None:
 # This callback will be invoked when the waitlist task is finished.
 @agent.on_task_complete("waitlist")
 def on_waitlist_done(call: guava.Call) -> None:
+    # Here is where you would save this information to your backend. For now, we'll just log it.
     logger.info(
         "Added %s, party of %d, to waitlist.",
         call.get_field("caller_name"),
@@ -64,11 +69,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.phone:
-        agent.inbound_phone(os.environ["GUAVA_AGENT_NUMBER"])
+        agent.listen_phone(os.environ["GUAVA_AGENT_NUMBER"])
     elif args.webrtc:
-        webrtc_code = Client().create_webrtc_agent(ttl=timedelta(days=1))
-        agent.inbound_webrtc(webrtc_code)
+        agent.listen_webrtc()
     else:
-        agent.local_call()
-
-    agent.run()
+        agent.call_local()

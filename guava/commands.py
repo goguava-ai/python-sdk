@@ -38,7 +38,7 @@ class SetTaskCommand(BaseModel):
     command_type: Literal["set-task"] = "set-task"
     task_id: str
     objective: str
-    success_criteria: Optional[str] = None
+    completion_criteria: Optional[str] = None
     action_items: list[ActionItem]
 
 
@@ -93,6 +93,10 @@ class ChoiceResultCommand(BaseModel):
     matched_choices: list[str]
     other_choices: list[str]
 
+class RetryTaskCommand(BaseModel):
+    command_type: Literal['retry-task'] = 'retry-task'
+    reason: str
+    
 class SetVariableCommand(BaseModel):
     command_type: Literal["set-variable"] = 'set-variable'
     key: str
@@ -115,6 +119,7 @@ Command = Annotated[
         TransferCommand,
         ChoiceResultCommand,
         SetLanguageMode,
+        RetryTaskCommand,
         SetVariableCommand,
     ],
     Field(discriminator="command_type"),

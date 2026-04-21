@@ -1,6 +1,7 @@
 import json
 import warnings
 
+from typing_extensions import deprecated
 from typing import Union, Literal, get_args, Annotated, Any, Optional
 from pydantic import BaseModel, Field, TypeAdapter
 from .types import E164PhoneNumber
@@ -8,6 +9,7 @@ from .types import E164PhoneNumber
 class BaseEvent(BaseModel):
     sequence: int | None = None
 
+@deprecated("This event is no longer used, but retained for comaptibility with older SDK versions.")
 class OutboundSessionStartedEvent(BaseEvent):
     event_type: Literal["session-started"] = "session-started"
     session_id: str
@@ -23,10 +25,15 @@ class SocketHealthEvent(BaseEvent):
 
 
 class CallerSpeechEvent(BaseEvent):
-    """The caller has said something."""
+    """
+    The caller has said something.
+    For utterances with the same id,
+    All but the latest is out of date.
+    """
 
     event_type: Literal["caller-speech"] = "caller-speech"
     utterance: str
+    utterance_id: Optional[str] = None
 
 
 class AgentSpeechEvent(BaseEvent):
