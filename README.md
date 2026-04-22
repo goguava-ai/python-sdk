@@ -4,7 +4,7 @@
 
 ## Documentation
 
-Full documentation for the Python SDK can be found at [https://docs.goguava.ai/](https://docs.goguava.ai/). Examples can be found under [./guava/examples/](/guava/examples/).
+Full documentation for the Python SDK can be found at [https://goguava.ai/docs](https://goguava.ai/docs). SDK examples can be found under [./guava/examples/](https://github.com/goguava-ai/python-sdk/tree/main/guava/examples).
 
 
 ## Installation
@@ -26,7 +26,7 @@ $ export GUAVA_API_KEY="..."
 $ export GUAVA_AGENT_NUMBER="..."
 ```
 
-Examples can be run using the `guava.examples` submodule.
+Examples can be run directly using the `guava.examples` submodule.
 
 ```bash
 $ python -m guava.examples.scheduling_outbound +1... "John Doe" # Use your own phone number and name to receive a call.
