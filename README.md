@@ -4,7 +4,7 @@
 
 ## Documentation
 
-Full documentation for the Python SDK can be found at [https://goguava.ai/docs](https://goguava.ai/docs). SDK examples can be found under [./guava/examples/](https://github.com/goguava-ai/python-sdk/tree/main/guava/examples).
+Full documentation for the Python SDK can be found at [https://goguava.ai/docs](https://goguava.ai/docs). SDK examples can be found under [./examples/](https://github.com/goguava-ai/python-sdk/tree/main/examples).
 
 
 ## Installation
