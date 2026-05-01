@@ -294,7 +294,7 @@ class Client:
     def serve_campaign(
         self,
         *,
-        campaign: "campaigns.OutboundCampaign",
+        campaign: "campaigns.Campaign",
         controller: Type[U],
     ):
         init_timeout: float = 5.0

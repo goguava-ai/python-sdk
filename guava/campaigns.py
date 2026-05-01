@@ -7,7 +7,8 @@ from pydantic import BaseModel, Field
 
 import logging
 
-from guava.utils import check_response
+from guava.telemetry import telemetry_client
+from guava.utils import check_response, deprecated
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +18,8 @@ class Contact(BaseModel):
     outreach_modalities: Optional[list[OutreachModality]] = None
 
 
-class OutboundCampaign:
+@telemetry_client.track_class()
+class Campaign:
     def __init__(self, data: dict):
         self.id = data.get("id")
         self.name = data.get("name")
@@ -57,6 +59,7 @@ class OutboundCampaign:
         check_response(response)
         return response.json()
 
+    @deprecated("Campaign.update")
     def update(self, **kwargs):
         response = httpx.patch(
             self._client.get_http_url(f'v1/campaigns/{self.id}'),
@@ -78,19 +81,20 @@ class OutboundCampaign:
         return response.json()
 
     def __repr__(self):
-        return f"OutboundCampaign(name={self.name!r}, id={self.id!r})"
+        return f"Campaign(name={self.name!r}, id={self.id!r})"
 
 
-def list_campaigns() -> list[OutboundCampaign]:
+def list_campaigns() -> list[Campaign]:
     client = Client()
     response = httpx.get(
         client.get_http_url('v1/campaigns'),
         headers=client._get_headers(),
     )
     check_response(response)
-    return [OutboundCampaign(c) for c in response.json()]
+    return [Campaign(c) for c in response.json()]
 
 
+@deprecated("get_or_create_campaign")
 def get_or_create_campaign(
     campaign_name: str,
     origin_phone_numbers: Optional[list] = None,
@@ -101,7 +105,7 @@ def get_or_create_campaign(
     timezone: Optional[str] = None,
     end_date: Optional[str] = None,
     description: str | None = None,
-) -> OutboundCampaign:
+) -> Campaign:
     """
     calling_windows: list of {"day": 0-6, "start_time": "HH:MM", "end_time": "HH:MM"}
     start_date / end_date: "YYYY-MM-DD"
@@ -133,7 +137,50 @@ def get_or_create_campaign(
         headers=client._get_headers(),
     )
     check_response(response)
-    return OutboundCampaign(response.json())
+    return Campaign(response.json())
 
 
+def create_or_update_campaign(
+    campaign_name: str,
+    origin_phone_numbers: Optional[list] = None,
+    calling_windows: Optional[list] = None,
+    start_date: Optional[str] = None,
+    max_concurrency: Optional[int] = None,
+    max_attempts: Optional[int] = None,
+    timezone: Optional[str] = None,
+    end_date: Optional[str] = None,
+    description: str | None = None,
+) -> Campaign:
+    """
+    calling_windows: list of {"day": 0-6, "start_time": "HH:MM", "end_time": "HH:MM"}
+    start_date / end_date: "YYYY-MM-DD"
 
+    origin_phone_numbers, calling_windows, and start_date are only required when
+    creating a new campaign. If the campaign already exists, it will be updated
+    with the provided fields.
+    """
+    client = Client()
+
+    request_json: dict = {'name': campaign_name}
+    if origin_phone_numbers is not None:
+        request_json['origin_phone_numbers'] = origin_phone_numbers
+    if calling_windows is not None:
+        request_json['calling_windows'] = calling_windows
+    if start_date is not None:
+        request_json['start_date'] = start_date
+    if end_date is not None:
+        request_json['end_date'] = end_date
+    if max_concurrency is not None:
+        request_json['max_concurrency'] = max_concurrency
+    if max_attempts is not None:
+        request_json['max_attempts'] = max_attempts
+    if timezone is not None:
+        request_json['timezone'] = timezone
+    if description is not None:
+        request_json['description'] = description
+    response = httpx.put(
+        client.get_http_url('v1/campaigns'), json=request_json,
+        headers=client._get_headers(),
+    )
+    check_response(response)
+    return Campaign(response.json())

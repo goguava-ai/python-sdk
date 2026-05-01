@@ -75,6 +75,7 @@ class RegisteredHooksCommand(BaseModel):
     has_on_question: bool
     has_on_intent: bool
     has_on_action_requested: bool = False
+    has_on_escalate: bool = False
 
 class SendInstructionCommand(BaseModel):
     command_type: Literal["send-instruction"] = "send-instruction"

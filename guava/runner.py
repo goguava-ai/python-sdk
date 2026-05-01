@@ -26,7 +26,7 @@ class Runner:
         self._add(agent.listen_sip, args=(sip_code,))
         return self
 
-    def attach_campaign(self, agent: "Agent", campaign: campaigns.OutboundCampaign) -> "Runner":
+    def attach_campaign(self, agent: "Agent", campaign: campaigns.Campaign) -> "Runner":
         self._add(agent.attach_campaign, kwargs={"campaign": campaign})
         return self
 

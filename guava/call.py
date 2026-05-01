@@ -90,6 +90,18 @@ class Call:
             )
         )
 
+    def set_voicemail_action(self, hangup: bool = False, message: str | None = None):
+        if hangup and message:
+            raise ValueError("Cannot specify both 'hangup' and 'message'.")
+        if not hangup and not message:
+            raise ValueError("Must specify either 'hangup' or 'message'.")
+        
+        if hangup:
+            self.send_instruction("If you encounter an answering machine, DO NOT leave a message. Hang up immediately.")
+
+        if message:
+            self.send_instruction(f"If you encounter an answering machine, say this message VERBATIM: {message}")
+
     def send_command(self, command: Command):
         self._command_queue.put(command)
         logger.debug("Command queued: %r", command)

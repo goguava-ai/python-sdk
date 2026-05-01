@@ -3,7 +3,7 @@ import os
 import guava
 import logging
 
-from guava.campaigns import get_or_create_campaign, Contact
+from guava.campaigns import create_or_update_campaign, Contact
 from guava import logging_utils, Agent, Field
 
 logger = logging.getLogger("guava.examples.polling_campaign")
@@ -95,8 +95,8 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    campaign = get_or_create_campaign(
-        "political-poll-example-5",
+    campaign = create_or_update_campaign(
+        "political-poll-example",
         origin_phone_numbers=[os.environ["GUAVA_AGENT_NUMBER"]],
         # Calling window times are interpreted in the campaign timezone (default: America/Los_Angeles).
         calling_windows=[

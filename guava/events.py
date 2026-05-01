@@ -120,6 +120,11 @@ class ChoiceQueryEvent(BaseEvent):
     query: str
     query_id: str
 
+class EscalateEvent(BaseEvent):
+    event_type: Literal['escalate'] = 'escalate'
+    requested_by: Literal['human', 'agent'] = 'human'
+
+
 Event = Annotated[
     Union[
         OutboundSessionStartedEvent,
@@ -139,6 +144,7 @@ Event = Annotated[
         BotSessionEnded,
         ChoiceQueryEvent,
         SocketHealthEvent,
+        EscalateEvent,
     ],
     Field(discriminator="event_type"),
 ]

@@ -34,6 +34,7 @@ from .events import (
     BotSessionEnded,
     OutboundCallFailed,
     OutboundCallConnected,
+    EscalateEvent,
     decode_event_dict,
 )
 from .commands import (
@@ -79,6 +80,8 @@ class Agent:
 
         self._on_session_end: Optional[Callable[[Call], None]] = None
         self._on_outbound_failed: Optional[Callable[[OutboundCallFailed], None]] = None
+
+        self._on_escalate: Optional[Callable[[Call], None]] = None
 
     @overload
     def on_call_received(self, fn: Callable[[CallInfo], IncomingCallAction], /) -> Callable[[CallInfo], IncomingCallAction]: ...
@@ -249,7 +252,14 @@ class Agent:
                 return fn
             return decorator
         
+    @overload
+    def on_escalate(self, fn: Callable[[Call], None], /) -> Callable[[Call], None]: ...
+    @overload
+    def on_escalate(self) -> Callable[[Callable[[Call], None]], Callable[[Call], None]]: ...
 
+    def on_escalate(self, fn=None):
+        return self._register("_on_escalate", fn)
+    
     def _dispatch_event(self, call: Call, event: Event) -> None:
         match event:
             case CallerSpeechEvent():
@@ -338,32 +348,46 @@ class Agent:
                         matched_choices=choices,
                         other_choices=other_choices,
                     ))
+            case EscalateEvent():
+                if self._on_escalate is not None:
+                    self._on_escalate(call)
+                elif event.requested_by == 'agent':
+                    call.send_instruction("No escalation target set. Apologize for not being able to help, ask them to try calling another time, and hang up the call immediately.")
+                elif event.requested_by == 'human':
+                    call.send_instruction("Let them know there are no respresentatives available to take their call. Ask them if they would prefer to continue or to call another time.")
             case _:
                 logger.warning("Received unexpected event: %r", event)
+
+    def _init_call(self, call_id: str, initial_variables: dict = {}) -> Call:
+        call = Call()
+        call.set_persona(
+            agent_name=self._name,
+            agent_purpose=self._purpose,
+            organization_name=self._organization
+        )
+        call.send_command(
+            RegisteredHooksCommand(
+                has_on_question=self._on_question is not None,
+                has_on_intent=False,
+                has_on_action_requested=self._on_action_requested is not None,
+                has_on_escalate=self._on_escalate is not None,
+            )
+        )
+
+        for key, value in initial_variables.items():
+            call.set_variable(key, value)
+
+        if self._on_call_start is not None:
+            self._on_call_start(call)
+
+        return call
 
     def _attach_to_call(self, call_id: str, initial_variables: dict = {}, route="v2/connect-call"):
         """Attach a call controller to a given call ID."""
         try:
             command_thread = None
 
-            call = Call()
-            call.set_persona(
-                agent_name=self._name,
-                agent_purpose=self._purpose,
-                organization_name=self._organization
-            )
-            call.send_command(
-                RegisteredHooksCommand(
-                    has_on_question=self._on_question is not None,
-                    has_on_intent=False,
-                    has_on_action_requested=self._on_action_requested is not None,
-                )
-            )
-            for key, value in initial_variables.items():
-                call.set_variable(key, value)
-
-            if self._on_call_start is not None:
-                self._on_call_start(call)
+            call = self._init_call(call_id, initial_variables)
 
             with GuavaSocket[Command, Event | None](
                     f"call-connection-{call_id}",
@@ -509,7 +533,7 @@ class Agent:
 
     def _serve_campaign(
         self,
-        campaign: "campaigns.OutboundCampaign",
+        campaign: "campaigns.Campaign",
     ):
         def initiate_call(call_id: str, contact_data: Any):
             data = contact_data.get('data', {})
@@ -574,6 +598,6 @@ class Agent:
     def attach_campaign(
         self,
         *,
-        campaign: campaigns.OutboundCampaign,
+        campaign: campaigns.Campaign,
     ) -> None:
         self._serve_campaign(campaign)
