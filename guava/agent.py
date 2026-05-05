@@ -35,6 +35,7 @@ from .events import (
     OutboundCallFailed,
     OutboundCallConnected,
     EscalateEvent,
+    DTMFPressedEvent,
     decode_event_dict,
 )
 from .commands import (
@@ -54,10 +55,11 @@ class SuggestedAction(BaseModel):
 
 @telemetry_client.track_class()
 class Agent:
-    def __init__(self, name: Optional[str] = None, organization: Optional[str] = None, purpose: Optional[str] = None):
+    def __init__(self, name: Optional[str] = None, organization: Optional[str] = None, purpose: Optional[str] = None, voice: Optional[str] = None):
         self._name: Optional[str] = name
         self._organization: Optional[str] = organization
         self._purpose: Optional[str] = purpose
+        self._voice: Optional[str] = voice
 
         self._client = Client()
 
@@ -82,6 +84,7 @@ class Agent:
         self._on_outbound_failed: Optional[Callable[[OutboundCallFailed], None]] = None
 
         self._on_escalate: Optional[Callable[[Call], None]] = None
+        self._on_dtmf: Optional[Callable[[Call, DTMFPressedEvent], None]] = None
 
     @overload
     def on_call_received(self, fn: Callable[[CallInfo], IncomingCallAction], /) -> Callable[[CallInfo], IncomingCallAction]: ...
@@ -259,7 +262,15 @@ class Agent:
 
     def on_escalate(self, fn=None):
         return self._register("_on_escalate", fn)
-    
+
+    @overload
+    def on_dtmf(self, fn: Callable[[Call, DTMFPressedEvent], None], /) -> Callable[[Call, DTMFPressedEvent], None]: ...
+    @overload
+    def on_dtmf(self) -> Callable[[Callable[[Call, DTMFPressedEvent], None]], Callable[[Call, DTMFPressedEvent], None]]: ...
+
+    def on_dtmf(self, fn=None):
+        return self._register("_on_dtmf", fn)
+
     def _dispatch_event(self, call: Call, event: Event) -> None:
         match event:
             case CallerSpeechEvent():
@@ -348,6 +359,9 @@ class Agent:
                         matched_choices=choices,
                         other_choices=other_choices,
                     ))
+            case DTMFPressedEvent():
+                if self._on_dtmf is not None:
+                    self._on_dtmf(call, event)
             case EscalateEvent():
                 if self._on_escalate is not None:
                     self._on_escalate(call)
@@ -359,11 +373,12 @@ class Agent:
                 logger.warning("Received unexpected event: %r", event)
 
     def _init_call(self, call_id: str, initial_variables: dict = {}) -> Call:
-        call = Call()
+        call = Call(call_id)
         call.set_persona(
             agent_name=self._name,
             agent_purpose=self._purpose,
-            organization_name=self._organization
+            organization_name=self._organization,
+            voice=self._voice
         )
         call.send_command(
             RegisteredHooksCommand(

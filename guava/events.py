@@ -4,7 +4,7 @@ import warnings
 from typing_extensions import deprecated
 from typing import Union, Literal, get_args, Annotated, Any, Optional
 from pydantic import BaseModel, Field, TypeAdapter
-from .types import E164PhoneNumber
+from .types import E164PhoneNumber, DTMFDigit
 
 class BaseEvent(BaseModel):
     sequence: int | None = None
@@ -124,6 +124,9 @@ class EscalateEvent(BaseEvent):
     event_type: Literal['escalate'] = 'escalate'
     requested_by: Literal['human', 'agent'] = 'human'
 
+class DTMFPressedEvent(BaseEvent):
+    event_type: Literal['dtmf'] = 'dtmf'
+    digit: DTMFDigit
 
 Event = Annotated[
     Union[
@@ -145,6 +148,7 @@ Event = Annotated[
         ChoiceQueryEvent,
         SocketHealthEvent,
         EscalateEvent,
+        DTMFPressedEvent,
     ],
     Field(discriminator="event_type"),
 ]

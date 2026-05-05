@@ -45,10 +45,15 @@ class ReachPersonOutcome(BaseModel):
 
 @telemetry_client.track_class()
 class Call:
-    def __init__(self) -> None:
+    def __init__(self, session_id: str) -> None:
+        self._session_id = session_id
         self._command_queue: queue.Queue[Command | CommandQueueEnd] = queue.Queue()
         self._field_values: dict[str, Any] = {}
         self._variables: dict[str, Any] = {}
+
+    @property
+    def id(self) -> str:
+        return self._session_id
 
     def set_variable(self, key: str, value: Any) -> None:
         if not is_jsonable(value):

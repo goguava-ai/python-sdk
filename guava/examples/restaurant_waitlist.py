@@ -14,9 +14,10 @@ from guava import logging_utils
 logger = logging.getLogger("thai_palace")
 
 agent = Agent(
-    name="Mia",
+    name="Leo",
     organization="Thai Palace",
     purpose="Helping callers join the restaurant waitlist",
+    voice="jack",
 )
 
 

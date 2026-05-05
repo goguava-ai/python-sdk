@@ -8,6 +8,8 @@ import warnings
 
 E164PhoneNumber = Annotated[str, StringConstraints(pattern=r"^\+[1-9]\d{1,14}$")]
 
+DTMFDigit = Literal["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "*", "#", "A", "B", "C", "D"]
+
 # modality options for campaign agentic outreach
 # NOTE: "rcs" is implemented (Twilio RCS sender, inbound webhook, fallback to SMS) but has not
 # been tested end-to-end and is not enabled for release. To enable, add "rcs" back to this Literal.
