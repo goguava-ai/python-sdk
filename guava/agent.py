@@ -1,10 +1,14 @@
+from __future__ import annotations
 from datetime import timedelta
 import logging
 import threading
 import httpx
 import time
 
-from typing import Callable, overload, Optional, Any
+from typing import TYPE_CHECKING, Callable, overload, Optional, Any
+
+if TYPE_CHECKING:
+    from guava.testing import AgentPatcher
 from .telemetry import telemetry_client
 from guava.types.call_info import CallInfo
 from guava.types.incoming_call_action import IncomingCallAction, AcceptCall, DeclineCall
@@ -18,6 +22,7 @@ from .utils import check_response, is_jsonable
 from guava import campaigns, guavadialer_events
 from pydantic import BaseModel
 from functools import partial
+from guava.types.call_info import PSTNCallInfo
 
 from .events import (
     Event,
@@ -372,8 +377,8 @@ class Agent:
             case _:
                 logger.warning("Received unexpected event: %r", event)
 
-    def _init_call(self, call_id: str, initial_variables: dict = {}) -> Call:
-        call = Call(call_id)
+    def _init_call(self, call_id: str, call_info: CallInfo, initial_variables: dict = {}) -> Call:
+        call = Call(call_id, call_info)
         call.set_persona(
             agent_name=self._name,
             agent_purpose=self._purpose,
@@ -397,12 +402,12 @@ class Agent:
 
         return call
 
-    def _attach_to_call(self, call_id: str, initial_variables: dict = {}, route="v2/connect-call"):
+    def _attach_to_call(self, call_id: str, call_info: CallInfo, initial_variables: dict = {}, route="v2/connect-call"):
         """Attach a call controller to a given call ID."""
         try:
             command_thread = None
 
-            call = self._init_call(call_id, initial_variables)
+            call = self._init_call(call_id, call_info, initial_variables)
 
             with GuavaSocket[Command, Event | None](
                     f"call-connection-{call_id}",
@@ -523,7 +528,7 @@ class Agent:
                                 logger.info("Accepting call...")
                                 gs.send(listen_inbound.AnswerCall(call_id=server_message.call_id))
 
-                                threading.Thread(target=self._attach_to_call, args=(server_message.call_id, ), daemon=True).start()
+                                threading.Thread(target=self._attach_to_call, args=(server_message.call_id, server_message.call_info), daemon=True).start()
                             else:
                                 logger.error("Unknown action for incoming call: %r", call_action)
                         except Exception:
@@ -544,16 +549,20 @@ class Agent:
         ))
         call_id = response.json()["call_id"]
         logger.info("Outbound call created with session ID: %s", call_id)
-        self._attach_to_call(call_id, variables)
+        self._attach_to_call(call_id, PSTNCallInfo(from_number=from_number, to_number=to_number), variables)
 
     def _serve_campaign(
         self,
         campaign: "campaigns.Campaign",
     ):
         def initiate_call(call_id: str, contact_data: Any):
+            # TODO: The server needs to send the from_number that it chose in the case of multiple.
+            # outbound numbers attached to a campaign.
+            call_info = PSTNCallInfo(from_number=None, to_number=contact_data.get('phone_number'))
             data = contact_data.get('data', {})
+
             gs.send(guavadialer_events.ControllerReady(call_id=call_id))
-            self._attach_to_call(call_id, initial_variables=data, route="v2/connect-campaign-call")
+            self._attach_to_call(call_id, call_info, initial_variables=data, route="v2/connect-campaign-call")
 
         logger.info("Connecting to campaign '%s' (id: %s).", campaign.name, campaign.id)
         try:
@@ -616,3 +625,7 @@ class Agent:
         campaign: campaigns.Campaign,
     ) -> None:
         self._serve_campaign(campaign)
+
+    def patch(self) -> "AgentPatcher":
+        from guava.testing import AgentPatcher
+        return AgentPatcher(self)

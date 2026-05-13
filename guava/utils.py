@@ -3,6 +3,8 @@ import functools
 import warnings
 import httpx
 import json
+import sys
+from pathlib import Path
 
 from typing import Callable, TypeVar, Any, cast
 from .threading_utils import FirstEntry
@@ -10,7 +12,14 @@ from .threading_utils import FirstEntry
 DEFAULT_BASE_URL: str = "https://app.goguava.ai/"
 
 def get_base_url() -> str:
-    return os.getenv("GUAVA_BASE_URL", DEFAULT_BASE_URL)
+    if "GUAVA_BASE_URL" in os.environ:
+        return os.environ["GUAVA_BASE_URL"]
+    elif cli_config().exists():
+        # Try to read the base_url from the CLI config.
+        config = json.loads(cli_config().read_text())
+        return config.get("base_url", DEFAULT_BASE_URL)
+    else:
+        return DEFAULT_BASE_URL
 
 
 def check_response(response: httpx.Response) -> httpx.Response:
@@ -91,3 +100,32 @@ def is_jsonable(value) -> bool:
         return True
     except (TypeError, ValueError):
         return False
+    
+def platform_config_dir() -> Path:
+    """
+    Simple no-third-party equivalent of Rust dirs::config_dir().
+
+    Raises RuntimeError if the directory cannot be determined.
+    """
+    if sys.platform == "win32":
+        appdata = os.environ.get("APPDATA")
+        if not appdata:
+            raise RuntimeError("Could not determine config directory: APPDATA is not set")
+        return Path(appdata)
+
+    try:
+        home = Path.home()
+    except RuntimeError as exc:
+        raise RuntimeError("Could not determine config directory: home directory is unknown") from exc
+
+    if sys.platform == "darwin":
+        return home / "Library" / "Application Support"
+
+    xdg_config_home = os.environ.get("XDG_CONFIG_HOME")
+    if xdg_config_home:
+        return Path(xdg_config_home)
+
+    return home / ".config"
+
+def cli_config() -> Path:
+    return platform_config_dir() / "guava" / "config.json"

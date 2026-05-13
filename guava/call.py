@@ -23,6 +23,7 @@ from guava.telemetry import telemetry_client
 from guava.call_controller import CommandQueueEnd
 from guava.utils import is_jsonable
 from pydantic import BaseModel
+from guava.types.call_info import CallInfo
 
 logger = logging.getLogger("guava.call")
 
@@ -45,8 +46,10 @@ class ReachPersonOutcome(BaseModel):
 
 @telemetry_client.track_class()
 class Call:
-    def __init__(self, session_id: str) -> None:
+    def __init__(self, session_id: str, call_info: CallInfo) -> None:
         self._session_id = session_id
+        self._call_info = call_info
+
         self._command_queue: queue.Queue[Command | CommandQueueEnd] = queue.Queue()
         self._field_values: dict[str, Any] = {}
         self._variables: dict[str, Any] = {}
@@ -54,6 +57,10 @@ class Call:
     @property
     def id(self) -> str:
         return self._session_id
+    
+    @property
+    def call_info(self) -> CallInfo:
+        return self._call_info
 
     def set_variable(self, key: str, value: Any) -> None:
         if not is_jsonable(value):
@@ -66,6 +73,9 @@ class Call:
 
     def get_variable(self, key: str, default: Any = None) -> Any:
         return self._variables.get(key, default)
+
+    set_var = set_variable
+    get_var = get_variable
 
     def set_language_mode(
             self,

@@ -5,6 +5,7 @@ import httpx
 import platform
 import warnings
 import sys
+
 from queue import Empty
 
 from .events import (
@@ -27,7 +28,8 @@ from .threading_utils import FirstEntry
 
 from guava.socket.client import GuavaSocket, GuavaSocketClosedError
 from . import listen_inbound, guavadialer_events
-from .utils import get_base_url, check_exactly_one, check_response, preview
+from .utils import get_base_url, check_exactly_one, check_response, preview, cli_config
+from .auth import AuthStrategy, APIKeyAuth, cli_auth
 from .telemetry import telemetry_client
 from guava.types.call_info import CallInfo, PSTNCallInfo
 from datetime import timedelta
@@ -58,9 +60,11 @@ class Client:
             self._base_url = get_base_url()
 
         if api_key:
-            self._api_key = api_key
+            self._auth: AuthStrategy = APIKeyAuth(api_key)
         elif 'GUAVA_API_KEY' in os.environ:
-            self._api_key = os.environ['GUAVA_API_KEY']
+            self._auth = APIKeyAuth(os.environ['GUAVA_API_KEY'])
+        elif cli_config().exists():
+            self._auth = cli_auth.get()
         else:
             raise Exception("Guava API key must be provided either as argument to client constructor, or in environment variable GUAVA_API_KEY.")
         
@@ -106,7 +110,7 @@ class Client:
 
     def _get_headers(self) -> dict[str, str]:
         return {
-            "Authorization": f"Bearer {self._api_key}",
+            **self._auth.get_headers(),
             "x-guava-platform": platform.system(),
             "x-guava-runtime": platform.python_implementation(),
             "x-guava-runtime-version": platform.python_version(),
