@@ -52,11 +52,25 @@ class AnswerQuestionCommand(BaseModel):
     question_id: str
     answer: str
 
+class ActionCandidate(BaseModel):
+    key: str
+    description: str = ''
+
 class ActionSuggestionCommand(BaseModel):
     command_type: Literal["action-suggestion"] = "action-suggestion"
     intent_id: str
-    action_key: Optional[str] # The key of the task that should be performed based on this intent
+    # Legacy fields for unambiguous intents, preserved so older SDKs keep working.
+    action_key: Optional[str] = None
     action_description: str = ''
+    # Empty list = no match. One element = single unambiguous intent. Multiple = ambiguous intent.
+    actions: list[ActionCandidate] = Field(default_factory=list)
+
+    # Populate actions from action_key/description for legacy sdks
+    @model_validator(mode="after")
+    def _normalize(self):
+        if not self.actions and self.action_key is not None:
+            self.actions = [ActionCandidate(key=self.action_key, description=self.action_description)]
+        return self
 
 class SetPersona(BaseModel):
     command_type: Literal["set-persona"] = "set-persona"

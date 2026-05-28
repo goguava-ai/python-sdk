@@ -88,5 +88,10 @@ class AgentPatcher:
             return self._agent.on_action()
         return self._agent.on_action(fn_or_action_key)
 
+    def on_reach_person(self, fn=None):
+        if fn is None:
+            return self._agent.on_reach_person()
+        return self._agent.on_reach_person(fn)
+
     def on_search_query(self, field_key: str):
         return self._agent.on_search_query(field_key)

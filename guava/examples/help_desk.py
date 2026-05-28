@@ -1,12 +1,13 @@
-import os
+import argparse
 import guava
 import logging
 
-from guava import Agent, SuggestedAction
+from guava import Agent
 from guava import logging_utils
 from guava.examples.example_data import FURNITURE_RETAILER_QA
 from guava.helpers.rag import DocumentQA
-from guava.helpers.openai import IntentRecognizer
+from guava.examples import example_data
+from guava.helpers.llm import IntentRecognizer
 
 logger = logging.getLogger("help_desk")
 
@@ -36,8 +37,8 @@ def on_question(call: guava.Call, question: str) -> str:
 
 
 @agent.on_action_request
-def on_action_request(call: guava.Call, request: str) -> SuggestedAction:
-    return SuggestedAction(key=intent_recognizer.classify(request))
+def on_action_request(call: guava.Call, request: str):
+    return intent_recognizer.classify(request)
 
 
 @agent.on_action("sales")
@@ -74,4 +75,25 @@ def other_request(call: guava.Call):
 
 if __name__ == "__main__":
     logging_utils.configure_logging()
-    agent.listen_phone(os.environ["GUAVA_AGENT_NUMBER"])
+
+    parser = argparse.ArgumentParser()
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument(
+        "--phone", metavar="PHONE_NUMBER", nargs="?", const="", help="Listen for phone calls."
+    )
+    group.add_argument(
+        "--webrtc", metavar="WEBRTC_CODE", nargs="?", const="", help="Listen on a WebRTC code."
+    )
+    group.add_argument("--local", action="store_true", help="Start a local call.")
+    group.add_argument("--sip", metavar="SIP_CODE", help="Listen on a SIP code 'guavasip-...'.")
+    args = parser.parse_args()
+
+    # Every Agent can be attached to one of many different channels.
+    if args.phone is not None:
+        agent.listen_phone(args.phone or example_data.get_phone_number())
+    elif args.webrtc is not None:
+        agent.listen_webrtc(args.webrtc or None)
+    elif args.sip:
+        agent.listen_sip(args.sip)
+    else:
+        agent.call_local()

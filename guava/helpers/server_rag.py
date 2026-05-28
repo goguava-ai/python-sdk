@@ -1,9 +1,12 @@
 import hashlib
 import logging
 import warnings
-from urllib.parse import urljoin
 
 import httpx
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from guava.client import Client
 
 from guava.utils import check_response
 
@@ -37,25 +40,18 @@ class ServerRAG:
             when running multiple instances concurrently for the same user.
     """
 
-    def __init__(self, base_url: str, api_key: str, *, namespace: str | None = None):
-        self._base_url = base_url
-        self._api_key = api_key
+    def __init__(self, client: "Client", *, namespace: str | None = None):
+        self._client = client
         self._namespace = namespace
         self._tracked_keys: set[str] = set()
-
-    def _headers(self) -> dict[str, str]:
-        return {"Authorization": f"Bearer {self._api_key}"}
-
-    def _url(self, path: str) -> str:
-        return urljoin(self._base_url, path)
 
     # --- Raw HTTP operations (private) ---
 
     def _upload_document(self, key: str, text: str) -> dict:
         r = httpx.post(
-            self._url("v1/rag/documents"),
+            self._client.get_http_url("v1/rag/documents"),
             json={"key": key, "text": text},
-            headers=self._headers(),
+            headers=self._client._get_headers(),
             timeout=60.0,
         )
         check_response(r)
@@ -63,16 +59,16 @@ class ServerRAG:
 
     def _delete_document(self, key: str) -> None:
         r = httpx.delete(
-            self._url(f"v1/rag/documents/{key}"),
-            headers=self._headers(),
+            self._client.get_http_url(f"v1/rag/documents/{key}"),
+            headers=self._client._get_headers(),
             timeout=30.0,
         )
         check_response(r)
 
     def _list_documents(self) -> list[dict]:
         r = httpx.get(
-            self._url("v1/rag/documents"),
-            headers=self._headers(),
+            self._client.get_http_url("v1/rag/documents"),
+            headers=self._client._get_headers(),
             timeout=30.0,
         )
         check_response(r)
@@ -91,9 +87,9 @@ class ServerRAG:
             payload["instructions"] = instructions
 
         r = httpx.post(
-            self._url("v1/rag/ask"),
+            self._client.get_http_url("v1/rag/ask"),
             json=payload,
-            headers=self._headers(),
+            headers=self._client._get_headers(),
             timeout=120.0,
         )
         check_response(r)

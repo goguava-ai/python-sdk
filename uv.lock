@@ -940,11 +940,10 @@ wheels = [
 
 [[package]]
 name = "guava-sdk"
-version = "0.24.0"
+version = "0.26.0"
 source = { editable = "." }
 dependencies = [
-    { name = "google-genai" },
-    { name = "openai" },
+    { name = "httpx" },
     { name = "pydantic" },
     { name = "typing-extensions" },
     { name = "websockets" },
@@ -971,9 +970,11 @@ pinecone = [
 dev = [
     { name = "aiortc" },
     { name = "fastapi" },
+    { name = "google-genai" },
     { name = "mypy" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.4.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "openai" },
     { name = "ruff" },
     { name = "semgrep" },
     { name = "simple503" },
@@ -985,10 +986,9 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "chromadb", marker = "extra == 'chromadb'", specifier = ">=0.6.0" },
-    { name = "google-genai", specifier = ">=1.55.0" },
+    { name = "httpx", specifier = ">=0.27.0" },
     { name = "lancedb", marker = "extra == 'lancedb'", specifier = ">=0.20.0" },
     { name = "numpy", marker = "extra == 'pgvector'", specifier = ">=1.26.0" },
-    { name = "openai", specifier = ">=2.8.1" },
     { name = "pgvector", marker = "extra == 'pgvector'", specifier = ">=0.4.0" },
     { name = "pinecone", marker = "extra == 'pinecone'", specifier = ">=5.0.0" },
     { name = "psycopg", extras = ["binary"], marker = "extra == 'pgvector'", specifier = ">=3.2.0" },
@@ -1002,8 +1002,10 @@ provides-extras = ["lancedb", "pgvector", "chromadb", "pinecone"]
 dev = [
     { name = "aiortc", specifier = ">=1.14.0" },
     { name = "fastapi", specifier = ">=0.128.0" },
+    { name = "google-genai", specifier = ">=1.55.0" },
     { name = "mypy", specifier = ">=1.18.2" },
     { name = "numpy", specifier = ">=2.2.6" },
+    { name = "openai", specifier = ">=2.8.1" },
     { name = "ruff", specifier = ">=0.14.6" },
     { name = "semgrep", specifier = ">=1.152.0" },
     { name = "simple503", specifier = ">=0.4.0" },

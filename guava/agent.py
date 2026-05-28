@@ -23,6 +23,7 @@ from guava import campaigns, guavadialer_events
 from pydantic import BaseModel
 from functools import partial
 from guava.types.call_info import PSTNCallInfo
+from .webrtc_helper import run_webrtc_helper
 
 from .events import (
     Event,
@@ -49,6 +50,7 @@ from .commands import (
     AnswerQuestionCommand,
     ChoiceResultCommand,
     ActionSuggestionCommand,
+    ActionCandidate,
 )
 from guava.call_controller import CommandQueueEnd
 
@@ -80,7 +82,7 @@ class Agent:
         self._on_question: Optional[Callable[[Call, str], str]] = None
         self._search_query_handlers: dict[str, Callable[[Call, str], tuple]] = {}
 
-        self._on_action_requested: Optional[Callable[[Call, str], SuggestedAction | None]] = None
+        self._on_action_requested: Optional[Callable[[Call, str], SuggestedAction | list[SuggestedAction] | None]] = None
 
         self._on_action_generic: Optional[Callable[[Call, str], None]] = None
         self._on_action_handlers: dict[str, Callable[[Call], None]] = {}
@@ -156,9 +158,9 @@ class Agent:
         return self._register("_on_question", fn)
 
     @overload
-    def on_action_request(self, fn: Callable[[Call, str], SuggestedAction | None], /) -> Callable[[Call, str], SuggestedAction | None]: ...
+    def on_action_request(self, fn: Callable[[Call, str], SuggestedAction | list[SuggestedAction] | None], /) -> Callable[[Call, str], SuggestedAction | list[SuggestedAction] | None]: ...
     @overload
-    def on_action_request(self) -> Callable[[Callable[[Call, str], SuggestedAction | None]], Callable[[Call, str], SuggestedAction | None]]: ...
+    def on_action_request(self) -> Callable[[Callable[[Call, str], SuggestedAction | list[SuggestedAction] | None]], Callable[[Call, str], SuggestedAction | list[SuggestedAction] | None]]: ...
 
     def on_action_request(self, fn=None):
         return self._register("_on_action_requested", fn)
@@ -306,18 +308,14 @@ class Agent:
                     call.send_command(AnswerQuestionCommand(question_id=event.question_id, answer="I don't have an answer to that question."))
             case ActionRequestEvent():
                 logger.info("Received action request %s: %s", event.intent_id, event.intent_summary)
-                if self._on_action_requested is not None:
-                    suggestion = self._on_action_requested(call, event.intent_summary)
-                    if suggestion is not None:
-                        call.send_command(ActionSuggestionCommand(
-                            intent_id=event.intent_id,
-                            action_key=suggestion.key,
-                            action_description=suggestion.description or "",
-                        ))
-                    else:
-                        call.send_command(ActionSuggestionCommand(intent_id=event.intent_id, action_key=None))
+                suggestion = self._on_action_requested(call, event.intent_summary) if self._on_action_requested else None
+                if suggestion is None:
+                    actions: list[ActionCandidate] = []
+                elif isinstance(suggestion, SuggestedAction):
+                    actions = [ActionCandidate(key=suggestion.key, description=suggestion.description or "")]
                 else:
-                    call.send_command(ActionSuggestionCommand(intent_id=event.intent_id, action_key=None))
+                    actions = [ActionCandidate(key=s.key, description=s.description or "") for s in suggestion]
+                call.send_command(ActionSuggestionCommand(intent_id=event.intent_id, actions=actions))
             case ActionItemCompletedEvent():
                 call._field_values[event.key] = event.payload
                 if event.key and event.payload:
@@ -411,8 +409,8 @@ class Agent:
 
             with GuavaSocket[Command, Event | None](
                     f"call-connection-{call_id}",
-                    self._client.get_websocket_url(f"{route}/{call_id}"), 
-                    headers=self._client._get_headers(),
+                    self._client.get_websocket_url(f"{route}/{call_id}"),
+                    client=self._client,
                     serializer=lambda command: command.model_dump(),
                     deserializer=lambda e: decode_event_dict(e),
                     max_age_seconds=18000 # Conservatively kill the connection after 5 hours.
@@ -460,27 +458,11 @@ class Agent:
         self._listen_inbound(sip_code=sip_code)
 
     def call_local(self) -> None:
-        import sys
-        import importlib.util
-
-        # First check that required deps are available.
-        required_packages = ["aiortc", "sounddevice", "numpy"]
-        needed_packages = [pkg for pkg in required_packages if importlib.util.find_spec(pkg) is None]
-
-        if needed_packages:
-            print("Local calling requires the following additional dependencies to be installed:", needed_packages)
-            print("- To install using pip, run: pip install " + ' '.join(needed_packages))
-            print("- To install using uv, run: uv add " + ' '.join(needed_packages))
-            sys.exit(1)
-
-        import asyncio
-        from .terminal_call import TerminalCall
         webrtc_code = self._client.create_webrtc_agent(ttl=timedelta(minutes=5))
-
         threading.Thread(target=self._listen_inbound, kwargs={
             "webrtc_code": webrtc_code
         }, daemon=True).start()
-        asyncio.run(TerminalCall(self._client, webrtc_code).start())
+        run_webrtc_helper(webrtc_code, self._client._base_url)
 
     def _listen_inbound(self, agent_number: str | None = None, webrtc_code: str | None = None, sip_code: str | None = None):
         if not check_exactly_one(agent_number, webrtc_code, sip_code):
@@ -498,7 +480,7 @@ class Agent:
         with GuavaSocket[listen_inbound.ClientMessage, listen_inbound.ServerMessage](
                 "listen-inbound",
                 self._client.get_websocket_url(f"v2/listen-inbound?{query_string}"),
-                headers=self._client._get_headers(),
+                client=self._client,
                 serializer=lambda msg: msg.model_dump(),
                 deserializer=listen_inbound.decode_server_message,
             ) as gs:
@@ -569,7 +551,7 @@ class Agent:
             with GuavaSocket[guavadialer_events.ClientMessage, guavadialer_events.ServerMessage](
                     "serve-campaign",
                     self._client.get_websocket_url(f"v1/serve-campaign/{campaign.id}"),
-                    headers=self._client._get_headers(),
+                    client=self._client,
                     serializer=lambda msg: msg.model_dump(),
                     deserializer=guavadialer_events.decode_server_message,
                 ) as gs:
@@ -608,7 +590,7 @@ class Agent:
                         case guavadialer_events.InitiateAndAssignCall():
                             # Only used in controller mode. In headless mode the server handles calls directly.
                             log_phone = server_message.contact_data.get('phone_number') if server_message.contact_data else '?'
-                            logger.info("Ready to make call, id %s — running precall for contact %s.", server_message.call_id, log_phone)
+                            logger.info("Ready to make call, id %s — Initiating call for contact %s.", server_message.call_id, log_phone)
                             t = threading.Thread(
                                 target=initiate_call,
                                 args=(server_message.call_id, server_message.contact_data),

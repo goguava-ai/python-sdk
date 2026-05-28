@@ -9,11 +9,10 @@ import atexit
 import logging
 
 from typing import Tuple
-from urllib.parse import urljoin
 from enum import Enum
-from .utils import get_base_url, NoOpLogger, check_response
+from .utils import NoOpLogger, check_response
 
-if os.getenv("GUAVA_DEBUG_TELEMETRY", "false").lower().strip() in ['yes', 'true']:
+if os.getenv("GUAVA_DEBUG_TELEMETRY", "false").lower().strip() in ['yes', 'true', 'on']:
     logger = logging.getLogger("guava.telemetry")
 else:
     logger = NoOpLogger()
@@ -24,7 +23,7 @@ class TelemetryEvent(str, Enum):
 
 class BaseTelemetryClient:
     def __init__(self):
-        self._sdk_headers = {}
+        self._sdk_client = None
 
     def send_event(self, event: TelemetryEvent, data: dict = {}):
         raise NotImplementedError()
@@ -74,8 +73,9 @@ class BaseTelemetryClient:
         
         return decorator
     
-    def set_sdk_headers(self, sdk_headers: dict):
-        self._sdk_headers = sdk_headers
+    def set_sdk_client(self, client):
+        logger.debug("Setting client for telemetry upload.")
+        self._sdk_client = client
     
 
 class TelemetryClient(BaseTelemetryClient):
@@ -85,15 +85,15 @@ class TelemetryClient(BaseTelemetryClient):
     def __init__(self):
         super().__init__()
 
-        self._base_url = get_base_url()
         self._event_queue: queue.Queue[Tuple[int, TelemetryEvent, dict]] = queue.Queue(maxsize=TelemetryClient.QUEUE_MAX_SIZE)
         self._upload_thread = threading.Thread(target=self._upload_events, daemon=True)
         self._shutdown_event = threading.Event()
         self._upload_thread.start()
         
     def _get_telemetry_endpoint(self) -> str:
-        return urljoin(self._base_url, "v1/upload-telemetry")
-        
+        assert self._sdk_client
+        return self._sdk_client.get_http_url("v1/upload-telemetry")
+
     def _get_timestamp_ms(self) -> int:
         return int(time.time() * 1000)
     
@@ -121,10 +121,14 @@ class TelemetryClient(BaseTelemetryClient):
             self._shutdown_event.wait(timeout=TelemetryClient.UPLOAD_INTERVAL_SECONDS)
 
             try:
+                if not self._sdk_client:
+                    logger.debug("No SDK client. Cannot upload telemetry events.")
+                    continue
+
                 payload = self._prepare_payload()
                 if payload:
                     logger.debug("Uploading %d telemetry events.", len(payload))
-                    r = httpx.post(self._get_telemetry_endpoint(), headers=self._sdk_headers,
+                    r = httpx.post(self._get_telemetry_endpoint(), headers=self._sdk_client._get_headers(),
                         json={ 'events': payload })
                     check_response(r)
                 else:

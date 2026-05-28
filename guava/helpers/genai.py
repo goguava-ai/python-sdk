@@ -1,7 +1,21 @@
-from google import genai
+from __future__ import annotations
+
+import warnings
+
 from datetime import date, timedelta
-from typing import Optional, Literal
+from typing import TYPE_CHECKING, Optional, Literal
 from pydantic import BaseModel, create_model, Field
+
+if TYPE_CHECKING:
+    from google import genai
+
+warnings.warn(
+    "guava.helpers.genai is deprecated and will be removed in a future release. "
+    "Please use guava.helpers.llm instead. If you would still like to use Gemini models, "
+    "check the Guava docs for examples on how to configure your own Gemini client.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 
 class IntentRecognizer:

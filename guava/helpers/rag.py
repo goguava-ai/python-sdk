@@ -1,5 +1,4 @@
 import logging
-import os
 import time
 import warnings
 from abc import ABC, abstractmethod
@@ -161,11 +160,9 @@ _DEFAULT_INSTRUCTIONS = (
 
 def _default_server_rag(namespace=None):
     from guava.helpers.server_rag import ServerRAG
-    from guava.utils import get_base_url
+    from guava.client import Client
 
-    return ServerRAG(
-        base_url=get_base_url(), api_key=os.environ["GUAVA_API_KEY"], namespace=namespace
-    )
+    return ServerRAG(client=Client(), namespace=namespace)
 
 
 @telemetry_client.track_class()

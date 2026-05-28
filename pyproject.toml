@@ -1,12 +1,11 @@
 [project]
 name = "guava-sdk"
-version = "0.24.0"
+version = "0.26.0"
 description = "The official Python SDK for building Guava voice agents."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "google-genai>=1.55.0",
-    "openai>=2.8.1",
+    "httpx>=0.27.0",
     "pydantic>=2.12.4",
     "typing-extensions>=4.15.0",
     "websockets>=15.0.1",
@@ -22,8 +21,10 @@ pinecone = ["pinecone>=5.0.0"]
 dev = [
     "aiortc>=1.14.0",
     "fastapi>=0.128.0",
+    "google-genai>=1.55.0",
     "mypy>=1.18.2",
     "numpy>=2.2.6",
+    "openai>=2.8.1",
     "ruff>=0.14.6",
     "semgrep>=1.152.0",
     "simple503>=0.4.0",

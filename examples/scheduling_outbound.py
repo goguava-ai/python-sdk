@@ -5,7 +5,7 @@ import guava
 
 from guava import logging_utils, Agent
 from guava.examples.example_data import MOCK_APPOINTMENTS
-from guava.helpers.openai import DatetimeFilter
+from guava.helpers.llm import DatetimeFilter
 
 logger = logging.getLogger("guava.examples.property_insurance")
 

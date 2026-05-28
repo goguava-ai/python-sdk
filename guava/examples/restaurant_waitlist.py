@@ -3,13 +3,13 @@ This is a simple restaurant waitlist example that shows you how to collect infor
 from inbound callers through the use of `call.set_task(...)`
 """
 
-import os
 import guava
 import argparse
 import logging
 
 from guava import Agent
 from guava import logging_utils
+from guava.examples import example_data
 
 logger = logging.getLogger("thai_palace")
 
@@ -67,15 +67,18 @@ if __name__ == "__main__":
     group.add_argument(
         "--phone", metavar="PHONE_NUMBER", nargs="?", const="", help="Listen for phone calls."
     )
-    group.add_argument("--webrtc", action="store_true", help="Create on a WebRTC code.")
+    group.add_argument(
+        "--webrtc", metavar="WEBRTC_CODE", nargs="?", const="", help="Listen on a WebRTC code."
+    )
     group.add_argument("--local", action="store_true", help="Start a local call.")
     group.add_argument("--sip", metavar="SIP_CODE", help="Listen on a SIP code 'guavasip-...'.")
     args = parser.parse_args()
 
+    # Every Agent can be attached to one of many different channels.
     if args.phone is not None:
-        agent.listen_phone(args.phone or os.environ["GUAVA_AGENT_NUMBER"])
-    elif args.webrtc:
-        agent.listen_webrtc()
+        agent.listen_phone(args.phone or example_data.get_phone_number())
+    elif args.webrtc is not None:
+        agent.listen_webrtc(args.webrtc or None)
     elif args.sip:
         agent.listen_sip(args.sip)
     else:

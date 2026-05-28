@@ -5,7 +5,10 @@ import random
 
 from websockets.exceptions import ConnectionClosed, InvalidStatus
 from pydantic import TypeAdapter
-from typing import Generic, TypeVar, Literal, Tuple, Callable, Union
+from typing import Generic, TypeVar, Literal, Tuple, Callable, Union, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from guava.client import Client
 from websockets.sync.client import connect as ws_connect, ClientConnection
 from .protocol import GuavaOpen, GuavaOpenAck, GuavaMessage, GuavaClose, GuavaPing, GuavaPong, GuavaAck, CloseReason, now_ms
 from threading import Lock, Thread, Event
@@ -37,14 +40,14 @@ class GuavaSocket(Generic[SendT, RecvT]):
         self,
         name: str,
         connection_url: str,
-        headers: dict,
+        client: "Client",
         serializer: Callable[[SendT], dict],
         deserializer: Callable[[dict], RecvT],
         max_age_seconds: float | None = None
     ):
         self._name = name
         self._connection_url = connection_url
-        self._headers = headers
+        self._client = client
         
         self._logger = logging.getLogger(f"guava.socket.{name}")
         
@@ -139,7 +142,7 @@ class GuavaSocket(Generic[SendT, RecvT]):
             num_attempts += 1
             
             try:
-                websocket = ws_connect(self._connection_url, additional_headers=self._headers, open_timeout=10, close_timeout=10)
+                websocket = ws_connect(self._connection_url, additional_headers=self._client._get_headers(), open_timeout=10, close_timeout=10)
                 websocket.send(
                     GuavaOpen(
                         name=self._name,

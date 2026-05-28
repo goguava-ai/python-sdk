@@ -112,7 +112,7 @@ class OutboundCallFailed(BaseEvent):
 
 class BotSessionEnded(BaseEvent):
     event_type: Literal["bot-session-ended"] = "bot-session-ended"
-    termination_reason: Literal["user-hangup", "bot-hangup", "bot-failure", "bot-transfer"]
+    termination_reason: Literal["user-hangup", "bot-hangup", "bot-failure", "bot-transfer", "voicemail"]
 
 class ChoiceQueryEvent(BaseEvent):
     event_type: Literal["choice-query"] = "choice-query"

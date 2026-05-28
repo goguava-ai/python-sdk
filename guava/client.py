@@ -4,7 +4,6 @@ import os
 import httpx
 import platform
 import warnings
-import sys
 
 from queue import Empty
 
@@ -19,6 +18,7 @@ from .commands import (
     Command,
 )
 
+from pydantic import BaseModel
 from typing import Optional, TypeVar, Type, Callable, Any, TYPE_CHECKING
 from urllib.parse import urljoin, urlencode
 from .call_controller import CallController, CommandQueueEnd
@@ -28,14 +28,18 @@ from .threading_utils import FirstEntry
 
 from guava.socket.client import GuavaSocket, GuavaSocketClosedError
 from . import listen_inbound, guavadialer_events
-from .utils import get_base_url, check_exactly_one, check_response, preview, cli_config
-from .auth import AuthStrategy, APIKeyAuth, cli_auth
+from .utils import get_base_url, check_exactly_one, check_response, cli_config
+from .auth import AuthStrategy, APIKeyAuth, GuavaDeploy, GUAVA_DEPLOY_TOKEN_PATH, cli_auth
 from .telemetry import telemetry_client
 from guava.types.call_info import CallInfo, PSTNCallInfo
 from datetime import timedelta
 
 if TYPE_CHECKING:
     from . import campaigns
+
+class PhoneNumberInfo(BaseModel):
+    phone_number: str
+
 
 SDK_NAME = "python-sdk"
 try:
@@ -60,7 +64,9 @@ class Client:
             self._base_url = get_base_url()
 
         if api_key:
-            self._auth: AuthStrategy = APIKeyAuth(api_key)
+            self._auth: AuthStrategy = APIKeyAuth(api_key) 
+        elif GUAVA_DEPLOY_TOKEN_PATH.exists(): 
+            self._auth = GuavaDeploy()
         elif 'GUAVA_API_KEY' in os.environ:
             self._auth = APIKeyAuth(os.environ['GUAVA_API_KEY'])
         elif cli_config().exists():
@@ -69,8 +75,8 @@ class Client:
             raise Exception("Guava API key must be provided either as argument to client constructor, or in environment variable GUAVA_API_KEY.")
         
         if first_client.claim():
-            # Set SDK headers for telemetry uploads.
-            telemetry_client.set_sdk_headers(self._get_headers())
+            # Set SDK client for telemetry uploads.
+            telemetry_client.set_sdk_client(self)
 
             logger.debug("Checking deprecation for SDK %s, %s.", SDK_NAME, __version__)
             try:
@@ -154,31 +160,6 @@ class Client:
         logger.info("Outbound call created with session ID: %s", call_id)
         self._attach_to_call(call_id, call_controller)
 
-    @preview("Terminal Calling")
-    def terminal_call(self, call_controller: U):
-        import importlib.util
-
-        # First check that required deps are available.
-        required_packages = ["aiortc", "sounddevice", "numpy"]
-        needed_packages = [pkg for pkg in required_packages if importlib.util.find_spec(pkg) is None]
-
-        if needed_packages:
-            print("Terminal calling requires the following additional dependencies to be installed:", needed_packages)
-            print("- To install using pip, run: pip install " + ' '.join(needed_packages))
-            print("- To install using uv, run: uv add " + ' '.join(needed_packages))
-            sys.exit(1)
-        
-        import asyncio
-        from .terminal_call import TerminalCall
-        webrtc_code = self.create_webrtc_agent()
-
-        listen_thread = threading.Thread(target=self.listen_inbound, kwargs={
-            'webrtc_code': webrtc_code,
-            'controller_factory': lambda _: call_controller
-        }, daemon=True)
-        listen_thread.start()
-        asyncio.run(TerminalCall(self, webrtc_code).start())
-
     def _attach_to_call(self, call_id: str, call_controller: U):
         """Attach a call controller to a given call ID."""
         try:
@@ -186,8 +167,8 @@ class Client:
             
             with GuavaSocket[Command, Event | None](
                     f"call-connection-{call_id}",
-                    self.get_websocket_url(f"v2/connect-call/{call_id}"), 
-                    headers=self._get_headers(),
+                    self.get_websocket_url(f"v2/connect-call/{call_id}"),
+                    client=self,
                     serializer=lambda command: command.model_dump(),
                     deserializer=lambda e: decode_event_dict(e),
                     max_age_seconds=18000 # Conservatively kill the connection after 5 hours.
@@ -252,7 +233,7 @@ class Client:
         with GuavaSocket[listen_inbound.ClientMessage, listen_inbound.ServerMessage](
                 "listen-inbound",
                 self.get_websocket_url(f"v2/listen-inbound?{query_string}"),
-                headers=self._get_headers(),
+                client=self,
                 serializer=lambda msg: msg.model_dump(),
                 deserializer=listen_inbound.decode_server_message,
             ) as gs:
@@ -325,7 +306,7 @@ class Client:
             with GuavaSocket[Command, Event](
                     f"campaign-call-{call_id}",
                     self.get_websocket_url(f"v2/connect-campaign-call/{call_id}"),
-                    headers=self._get_headers(),
+                    client=self,
                     serializer=lambda command: command.model_dump(),
                     deserializer=lambda e: decode_event_dict(e),
                     max_age_seconds=18000,
@@ -365,7 +346,7 @@ class Client:
             with GuavaSocket[guavadialer_events.ClientMessage, guavadialer_events.ServerMessage](
                     "serve-campaign",
                     self.get_websocket_url(f"v1/serve-campaign/{campaign_id}"),
-                    headers=self._get_headers(),
+                    client=self,
                     serializer=lambda msg: msg.model_dump(),
                     deserializer=guavadialer_events.decode_server_message,
                 ) as gs:
@@ -415,6 +396,13 @@ class Client:
                             t.start()
         except GuavaSocketClosedError:
             logger.info("Campaign '%s' disconnected.", campaign_name)
+
+    def list_numbers(self) -> list[PhoneNumberInfo]:
+        response = check_response(httpx.get(
+            self.get_http_url("v1/phone-numbers"),
+            headers=self._get_headers(),
+        ))
+        return [PhoneNumberInfo.model_validate(item) for item in response.json()]
 
     def send_sms(self, from_number: str, to_number: str, message: str) -> None:
         response = httpx.post(

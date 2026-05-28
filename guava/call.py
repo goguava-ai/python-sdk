@@ -112,7 +112,7 @@ class Call:
             raise ValueError("Must specify either 'hangup' or 'message'.")
         
         if hangup:
-            self.send_instruction("If you encounter an answering machine, DO NOT leave a message. Hang up immediately.")
+            self.send_instruction("If you encounter an answering machine, DO NOT leave a message. REMAIN SILENT AND HANG UP WITHOUT RESPONDING.")
 
         if message:
             self.send_instruction(f"If you encounter an answering machine, say this message VERBATIM: {message}")

@@ -1,5 +1,8 @@
+import hashlib
 import os
 import functools
+import shutil
+import tempfile
 import warnings
 import httpx
 import json
@@ -129,3 +132,19 @@ def platform_config_dir() -> Path:
 
 def cli_config() -> Path:
     return platform_config_dir() / "guava" / "config.json"
+
+def download_and_check(url: str, destination: Path, sha256sum: str) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp_path = Path(tmp_dir) / destination.name
+        with httpx.stream("GET", url, follow_redirects=True) as response:
+            check_response(response)
+            hasher = hashlib.sha256()
+            with tmp_path.open("wb") as f:
+                for chunk in response.iter_bytes():
+                    hasher.update(chunk)
+                    f.write(chunk)
+        actual = hasher.hexdigest()
+        if actual != sha256sum:
+            raise ValueError(f"SHA-256 mismatch: expected {sha256sum}, got {actual}")
+        shutil.copy2(tmp_path, destination)

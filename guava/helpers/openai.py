@@ -1,12 +1,25 @@
+from __future__ import annotations
+
 import time
-import openai
 import logging
 import hashlib
+import warnings
 from datetime import date
 from pydantic import create_model, Field
-from typing import Optional, Literal
+from typing import TYPE_CHECKING, Optional, Literal
 from . import beta
 from guava.telemetry import telemetry_client
+
+if TYPE_CHECKING:
+    import openai
+
+warnings.warn(
+    "guava.helpers.openai is deprecated and will be removed in a future release. "
+    "Please use guava.helpers.llm instead. If you would still like to use OpenAI models, "
+    "check the Guava docs for examples on how to configure your own OpenAI client.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 logger = logging.getLogger("guava.helpers.openai")
 

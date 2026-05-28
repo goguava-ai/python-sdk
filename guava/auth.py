@@ -1,6 +1,7 @@
 import json
 import logging
 import threading
+from pathlib import Path
 from urllib.parse import urljoin
 
 import httpx
@@ -16,8 +17,7 @@ logger = logging.getLogger("guava.auth")
 
 class AuthStrategy(ABC):
     @abstractmethod
-    def get_headers(self) -> dict[str, str]:
-        ...
+    def get_headers(self) -> dict[str, str]: ...
 
 
 class APIKeyAuth(AuthStrategy):
@@ -27,15 +27,30 @@ class APIKeyAuth(AuthStrategy):
     def get_headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self._api_key}"}
 
+
+GUAVA_DEPLOY_TOKEN_PATH = Path("/var/run/secrets/guava/token")
+_GUAVA_DEPLOY_TOKEN_PREFIX = "gva-deploy2-"
+
+
+class GuavaDeploy(AuthStrategy):
+    def __init__(self, token_path: Path = GUAVA_DEPLOY_TOKEN_PATH):
+        self._token_path = token_path
+
+    def get_headers(self) -> dict[str, str]:
+        token = self._token_path.read_text().strip()
+        return {"Authorization": f"Bearer {_GUAVA_DEPLOY_TOKEN_PREFIX}{token}"}
+
+
 TOKEN_REFRESH_BUFFER = timedelta(minutes=1)
+
 
 class CLIAuth(AuthStrategy):
     def __init__(self):
         config = json.loads(cli_config().read_text())
 
-        self._access_token = config['access_token']
-        self._expires_at = datetime.fromtimestamp(config['expires_at'], tz=timezone.utc)
-        self._refresh_token = config['refresh_token']
+        self._access_token = config["access_token"]
+        self._expires_at = datetime.fromtimestamp(config["expires_at"], tz=timezone.utc)
+        self._refresh_token = config["refresh_token"]
         self._org_id = config["org_id"]
         self._base_url = config.get("base_url", get_base_url())
         self._lock = threading.Lock()
@@ -49,19 +64,20 @@ class CLIAuth(AuthStrategy):
         token = check_response(resp).json()
         self._access_token = token["access_token"]
         self._expires_at = datetime.now(timezone.utc) + timedelta(seconds=token["expires_in"])
-        
+
         if "refresh_token" in token:
             logger.warning("Unexpected refresh token in response.")
 
     def get_headers(self) -> dict[str, str]:
-        with self._lock: # We could move this to double-checked if performance is lacking.
+        with self._lock:  # We could move this to double-checked if performance is lacking.
             now = datetime.now(timezone.utc)
             if self._expires_at - now <= TOKEN_REFRESH_BUFFER:
                 self.refresh_token()
-            
+
         return {
             "Authorization": f"Bearer {self._access_token}",
             "x-guava-org-id": self._org_id,
         }
+
 
 cli_auth = LazySingleton(CLIAuth)
