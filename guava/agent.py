@@ -557,6 +557,7 @@ class Agent:
                 ) as gs:
 
                 active_call_threads: list[threading.Thread] = []
+                shutting_down = threading.Event()
 
                 def poll_campaign_completion():
                     """Poll campaign status and close the socket when no callable contacts remain and no local calls are active."""
@@ -578,26 +579,53 @@ class Agent:
                                 gs.close()
                                 return
                         except Exception:
-                            logger.debug("Failed to poll campaign status, will retry.", exc_info=True)
+                            logger.warning("Failed to poll campaign status, will retry.", exc_info=True)
 
                 threading.Thread(target=poll_campaign_completion, daemon=True).start()
 
                 while gs.is_open():
-                    server_message = gs.recv()
-                    match server_message:
-                        case guavadialer_events.ListenStarted():
-                            logger.info("Listening for calls on campaign '%s' (controller mode). Ready.", campaign.name)
-                        case guavadialer_events.InitiateAndAssignCall():
-                            # Only used in controller mode. In headless mode the server handles calls directly.
-                            log_phone = server_message.contact_data.get('phone_number') if server_message.contact_data else '?'
-                            logger.info("Ready to make call, id %s — Initiating call for contact %s.", server_message.call_id, log_phone)
-                            t = threading.Thread(
-                                target=initiate_call,
-                                args=(server_message.call_id, server_message.contact_data),
-                                daemon=True,
+                    try:
+                        server_message = gs.recv()
+                        match server_message:
+                            case guavadialer_events.ListenStarted():
+                                logger.info("Listening for calls on campaign '%s'. Ready.", campaign.name)
+                            case guavadialer_events.InitiateAndAssignCall():
+                                # Only used in controller mode. In headless mode the server handles calls directly.
+                                log_phone = server_message.contact_data.get('phone_number') if server_message.contact_data else '?'
+                                logger.info("Ready to make call, id %s — initiating call setup and dispatch for contact %s.", server_message.call_id, log_phone)
+                                t = threading.Thread(
+                                    target=initiate_call,
+                                    args=(server_message.call_id, server_message.contact_data),
+                                    daemon=True,
+                                )
+                                active_call_threads.append(t)
+                                t.start()
+                    except KeyboardInterrupt:
+                        alive = [t for t in active_call_threads if t.is_alive()]
+                        if alive and not shutting_down.is_set():
+                            shutting_down.set()
+                            logger.info(
+                                "Caught Ctrl+C — %d call(s) still in progress. "
+                                "Disabling campaign so no new contacts are dispatched. "
+                                "Waiting for active calls to finish... (Ctrl+C again to force quit)",
+                                len(alive),
                             )
-                            active_call_threads.append(t)
-                            t.start()
+                            try:
+                                r = httpx.patch(
+                                    self._client.get_http_url(f"v1/campaigns/{campaign.id}"),
+                                    json={"enabled": False},
+                                    headers=self._client._get_headers(),
+                                )
+                                check_response(r)
+                            except Exception:
+                                logger.warning("Failed to disable campaign via API.", exc_info=True)
+                            for t in alive:
+                                t.join()
+                            logger.info("All active calls finished. Shutting down.")
+                            return
+                        else:
+                            logger.info("Force quitting campaign '%s'.", campaign.name)
+                            return
         except GuavaSocketClosedError:
             logger.info("Campaign '%s' disconnected.", campaign.name)
 

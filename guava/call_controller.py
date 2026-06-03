@@ -299,7 +299,7 @@ class CallController:
                 self.send_command(ActionSuggestionCommand(
                     intent_id=event.intent_id,
                     action_key=action_key,
-                    action_description=action_description
+                    action_description=action_description or ''
                 ))
             else:
                 self.send_command(ActionSuggestionCommand(

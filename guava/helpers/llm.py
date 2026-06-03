@@ -1,7 +1,7 @@
 import json
 import os
 from datetime import date, timedelta
-from typing import Literal, Optional
+from typing import Literal
 from urllib.parse import urljoin
 
 import httpx
@@ -69,13 +69,6 @@ class IntentRecognizer:
                     description="Choices that could match the caller's intent, ordered by likelihood. Include all plausible matches.",
                 ),
             ),
-            reasoning=(
-                Optional[str],
-                Field(
-                    None,
-                    description="Brief explanation of why these choices were selected.",
-                ),
-            ),
             __config__={"extra": "forbid"},
         ).model_json_schema()
 
@@ -92,15 +85,16 @@ class IntentRecognizer:
             list as-is to let the dialog engine disambiguate automatically.
         """
         input_prompt = f"""
-Analyze the given intent and identify which choices from the list could potentially match.
+Classify the intent below into the most appropriate choice(s) from the list.
 
 Intent: <intent>{intent}</intent>
 Available Choices: {[x for x in self.intent_choices]}
 
 Rules:
-- If the intent clearly matches ONE choice, return only that choice
-- If the intent could match MULTIPLE choices, return all plausible matches (ordered by likelihood, with the first element being the most likely and the last element being the least likely, but still plausible)
-- If the intent does NOT match any of the available choices, return an empty list
+- Default to returning a single choice — the one that best matches the intent.
+- Only return additional choices when the intent is genuinely ambiguous: a reasonable person reading it would be unable to decide which category it belongs to. Thematic overlap or partial relevance is NOT enough — do not include weakly or tangentially related choices.
+- Order matches by likelihood (most likely first).
+- If no choice plausibly matches, return an empty list.
 """
         if isinstance(self.intent_choices, dict):
             description_string = "\n  ".join(

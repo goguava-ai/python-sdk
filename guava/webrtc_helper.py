@@ -16,39 +16,39 @@ class ManifestEntry:
     url: str
     sha256: str
 
-HELPER_VERSION = "0.1.0"
+HELPER_VERSION = "0.2.0"
 
 
 MANIFEST: list[ManifestEntry] = [
     ManifestEntry(
         os="darwin",
         arch="aarch64",
-        url="https://storage.googleapis.com/gridspace-guava-cli/webrtc/0.1.0/guava-webrtc-darwin-aarch64",
-        sha256="c134efc45820ba50b461fc29918a49a0c4b9d5bf04367be86700a78309211dc5",
+        url="https://storage.googleapis.com/gridspace-guava-cli/webrtc/0.2.0/guava-webrtc-darwin-aarch64",
+        sha256="4f42f9d75fe1b78b9e4f794a475d6d01d6f18c0865d65b4ad14368d28a7e0b95",
     ),
     ManifestEntry(
         os="darwin",
         arch="x86_64",
-        url="https://storage.googleapis.com/gridspace-guava-cli/webrtc/0.1.0/guava-webrtc-darwin-x86_64",
-        sha256="bbe49b90184a863fcb8215ac4e6f09b827d4efa36ea2ffa958b11cc81422d45a",
+        url="https://storage.googleapis.com/gridspace-guava-cli/webrtc/0.2.0/guava-webrtc-darwin-x86_64",
+        sha256="0532f8a895142d9e4331f4a5552aae15d82fa7652725fdce08c46ba643c147df",
     ),
     ManifestEntry(
         os="linux",
         arch="aarch64",
-        url="https://storage.googleapis.com/gridspace-guava-cli/webrtc/0.1.0/guava-webrtc-linux-aarch64",
-        sha256="4b0f7cf4161e1b18130cfabe2754866eadd787e865bf2e51843688841ae1acf7",
+        url="https://storage.googleapis.com/gridspace-guava-cli/webrtc/0.2.0/guava-webrtc-linux-aarch64",
+        sha256="0abaeb725a9c809474adbbe88ee0dc5e6866ebdec724fa87fb44be4433a2f386",
     ),
     ManifestEntry(
         os="linux",
         arch="x86_64",
-        url="https://storage.googleapis.com/gridspace-guava-cli/webrtc/0.1.0/guava-webrtc-linux-x86_64",
-        sha256="ea2c8a479eacccf6188853bb41f1797c8e4506205ad1a293f392e08d1d11bb86",
+        url="https://storage.googleapis.com/gridspace-guava-cli/webrtc/0.2.0/guava-webrtc-linux-x86_64",
+        sha256="08dc989beb09058185f93e7f5dd4d92a4fb54419f7ba88be17dbaa6e5649ba4b",
     ),
     ManifestEntry(
         os="win32",
         arch="x86_64",
-        url="https://storage.googleapis.com/gridspace-guava-cli/webrtc/0.1.0/guava-webrtc-windows-x86_64.exe",
-        sha256="4957fa123527a16bf4242569dc7c3d3ca2cd2f6583b07d38d76ae467485fb032",
+        url="https://storage.googleapis.com/gridspace-guava-cli/webrtc/0.2.0/guava-webrtc-windows-x86_64.exe",
+        sha256="3bef8753605a2b84f2c33f4b9760dc084e1cc12f55b886a2a2983e061f4c30bb",
     ),
 ]
 
