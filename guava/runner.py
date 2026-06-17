@@ -1,8 +1,6 @@
 import threading
 from typing import TYPE_CHECKING
 
-from guava import campaigns
-
 if TYPE_CHECKING:
     from guava.agent import Agent
 
@@ -26,8 +24,8 @@ class Runner:
         self._add(agent.listen_sip, args=(sip_code,))
         return self
 
-    def attach_campaign(self, agent: "Agent", campaign: campaigns.Campaign) -> "Runner":
-        self._add(agent.attach_campaign, kwargs={"campaign": campaign})
+    def attach_campaign(self, agent: "Agent", campaign_code: str) -> "Runner":
+        self._add(agent.attach_campaign, kwargs={"campaign_code": campaign_code})
         return self
 
     def run(self) -> None:

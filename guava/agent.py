@@ -1,14 +1,18 @@
 from __future__ import annotations
+from contextlib import contextmanager
+from copy import copy
 from datetime import timedelta
+import inspect
 import logging
 import threading
+import warnings
 import httpx
-import time
 
-from typing import TYPE_CHECKING, Callable, overload, Optional, Any
+from typing import TYPE_CHECKING, Callable, Iterator, overload, Optional, Any, ParamSpec, cast
+from websockets.sync.client import connect as ws_connect
 
 if TYPE_CHECKING:
-    from guava.testing import AgentPatcher
+    from guava.testing.session import TestSession
 from .telemetry import telemetry_client
 from guava.types.call_info import CallInfo
 from guava.types.incoming_call_action import IncomingCallAction, AcceptCall, DeclineCall
@@ -51,10 +55,45 @@ from .commands import (
     ChoiceResultCommand,
     ActionSuggestionCommand,
     ActionCandidate,
+    ExpertErrorCommand
 )
 from guava.call_controller import CommandQueueEnd
+from .utils import preview
 
 logger = logging.getLogger("guava.agent")
+
+
+def _accepts_positional_arg(fn: Callable, position: int) -> bool:
+    """True if fn can accept a positional arg at the given (0-based) position."""
+    try:
+        params = inspect.signature(fn).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    positional = 0
+    for p in params:
+        if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD):
+            positional += 1
+        elif p.kind == p.VAR_POSITIONAL:
+            return True
+    return positional > position
+
+
+class _TUILogHandler(logging.Handler):
+    """Captures log records and feeds them into the chat TUI as 'system' messages."""
+    def __init__(self, messages: list, lock: threading.Lock):
+        super().__init__()
+        self._messages = messages
+        self._lock = lock
+        self.setFormatter(logging.Formatter(
+            "[%(levelname)s] (%(name)s) %(filename)s:%(lineno)d - %(message)s"
+        ))
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            with self._lock:
+                self._messages.append(("system", self.format(record), record.levelname))
+        except Exception:
+            self.handleError(record)
 
 class SuggestedAction(BaseModel):
     key: str
@@ -87,7 +126,7 @@ class Agent:
         self._on_action_generic: Optional[Callable[[Call, str], None]] = None
         self._on_action_handlers: dict[str, Callable[[Call], None]] = {}
 
-        self._on_session_end: Optional[Callable[[Call], None]] = None
+        self._on_session_end: Optional[Callable[[Call, BotSessionEnded], None] | Callable[[Call], None]] = None
         self._on_outbound_failed: Optional[Callable[[OutboundCallFailed], None]] = None
 
         self._on_escalate: Optional[Callable[[Call], None]] = None
@@ -147,7 +186,7 @@ class Agent:
     @overload
     def on_task_complete(self) -> Callable[[Callable[[Call, str], None]], Callable[[Call, str], None]]: ...
     @overload
-    def on_task_complete(self, task_name: str) -> Callable[[Callable[[Call], None]], Callable[[Call], None]]: ...
+    def on_task_complete(self, task_name: str, /) -> Callable[[Callable[[Call], None]], Callable[[Call], None]]: ...
 
     @overload
     def on_question(self, fn: Callable[[Call, str], str], /) -> Callable[[Call, str], str]: ...
@@ -166,11 +205,17 @@ class Agent:
         return self._register("_on_action_requested", fn)
 
     @overload
+    def on_session_end(self, fn: Callable[[Call, BotSessionEnded], None], /) -> Callable[[Call, BotSessionEnded], None]: ...
+    @overload
     def on_session_end(self, fn: Callable[[Call], None], /) -> Callable[[Call], None]: ...
     @overload
-    def on_session_end(self) -> Callable[[Callable[[Call], None]], Callable[[Call], None]]: ...
+    def on_session_end(self) -> Callable[[Callable[[Call, BotSessionEnded], None]], Callable[[Call, BotSessionEnded], None]]: ... # Intentionally set to only two-arg.
 
     def on_session_end(self, fn=None):
+        """
+        Register a handler to be invoked when the session ends.
+        The handler receives a Call object and a ``BotSessionEnded`` event.
+        """
         return self._register("_on_session_end", fn)
 
     @overload
@@ -234,7 +279,7 @@ class Agent:
     @overload
     def on_action(self) -> Callable[[Callable[[Call, str], None]], Callable[[Call, str], None]]: ...
     @overload
-    def on_action(self, action_key: str) -> Callable[[Callable[[Call], None]], Callable[[Call], None]]: ...
+    def on_action(self, action_key: str, /) -> Callable[[Callable[[Call], None]], Callable[[Call], None]]: ...
 
     def on_action(self, fn_or_action_key=None):
         _mix_err = "Cannot mix a generic on_action handler with per-action handlers."
@@ -278,43 +323,71 @@ class Agent:
     def on_dtmf(self, fn=None):
         return self._register("_on_dtmf", fn)
 
-    def _dispatch_event(self, call: Call, event: Event) -> None:
+    _P = ParamSpec("_P")
+
+    def _invoke_handler(self, call: Call, name: str, inform_agent: bool, handler: Callable[_P, None], *args: _P.args, **kwargs: _P.kwargs) -> None:
+        """Wraps invocation of a callback and logs an error. Use specifically for callbacks where the result is not used."""
+        try:
+            handler(*args, **kwargs)
+        except Exception:
+            logger.exception("An error occurred in the %s handler.", name)
+
+            if inform_agent:
+                call.send_command(ExpertErrorCommand(message=f"The expert encountered an error while processing {name}"))
+
+    def _dispatch_event(self, call: Call, event: Event, test_session: Optional[TestSession] = None) -> None:
         match event:
             case CallerSpeechEvent():
                 if self._on_caller_speech:
-                    self._on_caller_speech(call, event)
+                    self._invoke_handler(call, "on_caller_speech", False, self._on_caller_speech, call, event)
             case AgentSpeechEvent():
                 if self._on_agent_speech:
-                    self._on_agent_speech(call, event)
+                    self._invoke_handler(call, "on_agent_speech", False, self._on_agent_speech, call, event)
             case TaskCompletedEvent():
                 logger.info("Task %s completed.", event.task_id)
-                if self._on_task_complete_generic is not None:
-                    self._on_task_complete_generic(call, event.task_id)
-                elif event.task_id in self._on_task_complete_handlers:
-                    self._on_task_complete_handlers[event.task_id](call)
-                else:
-                    logger.warning("No handler registered for completion of task '%s'", event.task_id)
+                
+                try:
+                    if self._on_task_complete_generic is not None:
+                        self._on_task_complete_generic(call, event.task_id)
+                    elif event.task_id in self._on_task_complete_handlers:
+                        self._on_task_complete_handlers[event.task_id](call)
+                    else:
+                        logger.warning("No handler registered for completion of task '%s'", event.task_id)
+                except Exception:
+                    # Log an error for the developer, but send a message back so the Agent knows the Expert encountered an error.
+                    logger.exception("An error occurred in the on_task_complete('%s') handler.", event.task_id)
+                    call.send_command(ExpertErrorCommand(message=f"The expert encountered an error while processing on_task_complete('{event.task_id}') - the task has failed."))
             case AgentQuestionEvent():
+                logger.info("Received a question from agent: %s", event.question)
                 if self._on_question is not None:
                     try:
-                        logger.info("Received question from bot: %s", event.question)
                         answer = self._on_question(call, event.question)
                         call.send_command(AnswerQuestionCommand(question_id=event.question_id, answer=answer))
                     except Exception:
-                        logger.exception("Error occurred while answering question.")
+                        # Log the exception and inform the agent there was an error processing the question.
+                        logger.exception("An error occurred in the on_question handler.")
                         call.send_command(AnswerQuestionCommand(question_id=event.question_id, answer="An error occurred and the question could not be answered."))
                 else:
                     logger.warning("Received question but no on_question handler is registered: %s", event.question)
                     call.send_command(AnswerQuestionCommand(question_id=event.question_id, answer="I don't have an answer to that question."))
             case ActionRequestEvent():
                 logger.info("Received action request %s: %s", event.intent_id, event.intent_summary)
-                suggestion = self._on_action_requested(call, event.intent_summary) if self._on_action_requested else None
+                
+                try:
+                    suggestion = self._on_action_requested(call, event.intent_summary) if self._on_action_requested else None
+                except Exception:
+                    # Log the error and inform the agent.
+                    logger.exception("An error occurred in the on_action_request handler.")
+                    call.send_command(ExpertErrorCommand(message="The expert encountered an error while processing the on_action_request handler."))
+                    suggestion = None
+
                 if suggestion is None:
                     actions: list[ActionCandidate] = []
                 elif isinstance(suggestion, SuggestedAction):
                     actions = [ActionCandidate(key=suggestion.key, description=suggestion.description or "")]
                 else:
                     actions = [ActionCandidate(key=s.key, description=s.description or "") for s in suggestion]
+                
                 call.send_command(ActionSuggestionCommand(intent_id=event.intent_id, actions=actions))
             case ActionItemCompletedEvent():
                 call._field_values[event.key] = event.payload
@@ -322,52 +395,86 @@ class Agent:
                     logger.info("Field %s updated with value: %r", event.key, event.payload)
             case ExecuteActionEvent():
                 logger.info("Executing action '%s'", event.action_key)
+
+                # Track this for test sessions.
+                if test_session:
+                    test_session.executed_actions.append(event.action_key)
+
+                # We may either be calling the generic action handler, or the action-keyed handler.
                 on_action_func = None
                 if self._on_action_generic is not None:
                     on_action_func = partial(self._on_action_generic, call, event.action_key)
                 elif event.action_key in self._on_action_handlers:
                     on_action_func = partial(self._on_action_handlers[event.action_key], call)
+
                 if on_action_func:
-                    response = on_action_func()
-                    if response:
-                        logger.info("Action execution request (%s) responded with: %s", event.action_key, response)
-                        call.send_instruction(f"Responding to action execution {event.action_key}: {response}")
+                    try:
+                        response = on_action_func()
+                        if response:
+                            logger.info("Action execution request (%s) responded with: %s", event.action_key, response)
+                            call.send_instruction(f"Responding to action execution {event.action_key}: {response}")
+                    except Exception:
+                        logger.exception("An error occurred in the on_action('%s') handler.", event.action_key)
+                        call.send_command(ExpertErrorCommand(message=f"The expert encountered an error while processing the on_action('{event.action_key}') handler."))
                 else:
                     logger.warning("No handler registered for action '%s'", event.action_key)
             case BotSessionEnded():
                 logger.info("Session ended: %s", event.termination_reason)
+
+                # Save the session result to the test session.
+                if test_session:
+                    test_session.termination_reason = event.termination_reason
+
                 if self._on_session_end is not None:
-                    self._on_session_end(call)
+                    # Pass event if accepted; single-arg form is deprecated.
+                    if _accepts_positional_arg(self._on_session_end, 1):
+                        self._invoke_handler(call, "on_session_end", False, cast(Callable[[Call, BotSessionEnded], None], self._on_session_end), call, event)
+                    else:
+                        warnings.warn(
+                            "on_session_end handler should accept (Call, BotSessionEnded); "
+                            "the single-argument form is deprecated and will be removed in a future version.",
+                            DeprecationWarning,
+                            stacklevel=2,
+                        )
+                        self._invoke_handler(call, "on_session_end", False, cast(Callable[[Call], None], self._on_session_end), call)
             case OutboundCallFailed():
                 logger.error("Outbound call failed: %s", event.error_reason)
                 if self._on_outbound_failed is not None:
-                    self._on_outbound_failed(event)
+                    self._invoke_handler(call, "on_outbound_failed", False, self._on_outbound_failed, event)
             case ErrorEvent():
-                logger.error("Received error event: %s", event.content)
+                logger.error("Received error from Guava server: %s", event.content)
             case WarningEvent():
-                logger.warning("Received warning event: %s", event.content)
+                logger.warning("Received warning from Guava server: %s", event.content)
             case OutboundCallConnected():
                 # No handler for this yet.
                 pass
             case ChoiceQueryEvent():
                 logger.info("Received search query for field '%s': %s", event.field_key, event.query)
                 handler = self._search_query_handlers.get(event.field_key)
+
                 if handler is None:
                     logger.warning("Search query arrived for field '%s' with no handler attached.", event.field_key)
+                    call.send_command(ExpertErrorCommand(message=f"The expert failed to handle on_search_query('{event.field_key}'). No results will be forthcoming."))
                 else:
-                    choices, other_choices = handler(call, event.query)
-                    call.send_command(ChoiceResultCommand(
-                        field_key=event.field_key,
-                        query_id=event.query_id,
-                        matched_choices=choices,
-                        other_choices=other_choices,
-                    ))
+                    try:
+                        choices, other_choices = handler(call, event.query)
+                        call.send_command(ChoiceResultCommand(
+                            field_key=event.field_key,
+                            query_id=event.query_id,
+                            matched_choices=choices,
+                            other_choices=other_choices,
+                        ))
+                    except Exception:
+                        # Send back an empty result and inform the agent of the failure.
+                        logger.exception("An error occurred in the on_search_query('%s') handler.", event.field_key)
+                        call.send_command(ExpertErrorCommand(message=f"The expert encountered an error while processing the on_search_query('{event.field_key}') handler. No results will be forthcoming."))
             case DTMFPressedEvent():
                 if self._on_dtmf is not None:
-                    self._on_dtmf(call, event)
+                    self._invoke_handler(call, "on_dtmf", False, self._on_dtmf, call, event)
             case EscalateEvent():
                 if self._on_escalate is not None:
-                    self._on_escalate(call)
+                    # Inform the agent on escalation error.
+                    self._invoke_handler(call, "on_escalate", True, self._on_escalate, call)
                 elif event.requested_by == 'agent':
                     call.send_instruction("No escalation target set. Apologize for not being able to help, ask them to try calling another time, and hang up the call immediately.")
                 elif event.requested_by == 'human':
@@ -400,7 +507,7 @@ class Agent:
 
         return call
 
-    def _attach_to_call(self, call_id: str, call_info: CallInfo, initial_variables: dict = {}, route="v2/connect-call"):
+    def _attach_to_call(self, call_id: str, call_info: CallInfo, initial_variables: dict = {}, route="v2/connect-call", test_session: Optional[TestSession] = None):
         """Attach a call controller to a given call ID."""
         try:
             command_thread = None
@@ -436,7 +543,7 @@ class Agent:
                     if event is None:
                         continue
 
-                    self._dispatch_event(call, event)
+                    self._dispatch_event(call, event, test_session=test_session)
 
                     if isinstance(event, (BotSessionEnded, OutboundCallFailed)):
                         break
@@ -457,14 +564,15 @@ class Agent:
     def listen_sip(self, sip_code: str) -> None:
         self._listen_inbound(sip_code=sip_code)
 
-    def call_local(self) -> None:
+    def call_local(self, variables: dict[str, Any] = {}) -> None:
         webrtc_code = self._client.create_webrtc_agent(ttl=timedelta(minutes=5))
         threading.Thread(target=self._listen_inbound, kwargs={
-            "webrtc_code": webrtc_code
+            "webrtc_code": webrtc_code,
+            "initial_variables": variables,
         }, daemon=True).start()
         run_webrtc_helper(webrtc_code, self._client._base_url)
 
-    def _listen_inbound(self, agent_number: str | None = None, webrtc_code: str | None = None, sip_code: str | None = None):
+    def _listen_inbound(self, agent_number: str | None = None, webrtc_code: str | None = None, sip_code: str | None = None, initial_variables: dict[str, Any] = {}):
         if not check_exactly_one(agent_number, webrtc_code, sip_code):
             raise TypeError("One of agent_number, webrtc_code, or sip_code must be provided.")
         
@@ -510,7 +618,7 @@ class Agent:
                                 logger.info("Accepting call...")
                                 gs.send(listen_inbound.AnswerCall(call_id=server_message.call_id))
 
-                                threading.Thread(target=self._attach_to_call, args=(server_message.call_id, server_message.call_info), daemon=True).start()
+                                threading.Thread(target=self._attach_to_call, args=(server_message.call_id, server_message.call_info, initial_variables), daemon=True).start()
                             else:
                                 logger.error("Unknown action for incoming call: %r", call_action)
                         except Exception:
@@ -535,8 +643,9 @@ class Agent:
 
     def _serve_campaign(
         self,
-        campaign: "campaigns.Campaign",
+        campaign_code: str,
     ):
+        campaign = campaigns.get_campaign_by_code(campaign_code)
         def initiate_call(call_id: str, contact_data: Any):
             # TODO: The server needs to send the from_number that it chose in the case of multiple.
             # outbound numbers attached to a campaign.
@@ -559,29 +668,6 @@ class Agent:
                 active_call_threads: list[threading.Thread] = []
                 shutting_down = threading.Event()
 
-                def poll_campaign_completion():
-                    """Poll campaign status and close the socket when no callable contacts remain and no local calls are active."""
-                    while gs.is_open():
-                        time.sleep(5)
-                        try:
-                            r = httpx.get(
-                                self._client.get_http_url(f"v1/campaigns/{campaign.id}/has-callable-contacts"),
-                                headers=self._client._get_headers(),
-                            )
-                            check_response(r)
-                            if not r.json().get("has_callable_contacts", True):
-                                # Wait for any local call threads to finish before closing.
-                                alive = [t for t in active_call_threads if t.is_alive()]
-                                if alive:
-                                    logger.info("Campaign '%s' has no more callable contacts, but %d call(s) still active locally. Waiting.", campaign.name, len(alive))
-                                    continue
-                                logger.info("Campaign '%s' has no more callable contacts and no active calls. Closing.", campaign.name)
-                                gs.close()
-                                return
-                        except Exception:
-                            logger.warning("Failed to poll campaign status, will retry.", exc_info=True)
-
-                threading.Thread(target=poll_campaign_completion, daemon=True).start()
 
                 while gs.is_open():
                     try:
@@ -631,11 +717,296 @@ class Agent:
 
     def attach_campaign(
         self,
-        *,
-        campaign: campaigns.Campaign,
+        campaign_code: str
     ) -> None:
-        self._serve_campaign(campaign)
+        self._serve_campaign(campaign_code)
 
-    def patch(self) -> "AgentPatcher":
-        from guava.testing import AgentPatcher
-        return AgentPatcher(self)
+    @preview("Agent Testing")
+    def test_roleplay(self, roleplay_prompt: str, variables=None) -> "TestSession":
+        """Run an automated test conversation where an LLM plays the caller.
+
+        Args:
+            roleplay_prompt: Instructions for the simulated caller, e.g. "You are
+                a frustrated customer trying to cancel your subscription."
+            variables: Optional dict of initial call variables passed to the agent.
+
+        Returns:
+            The completed TestSession. Call ``session.evaluate()`` to assert
+            pass/fail criteria, or ``session.get_transcript()`` to get the transcript.
+        """
+        from websockets.exceptions import ConnectionClosedOK
+        from guava.helpers.llm import _generate
+        from guava.testing.protocol import BotTTS
+        from pydantic import BaseModel
+        from typing import Literal
+
+        class _RoleplayAction(BaseModel):
+            action: Literal["speak", "hangup"]
+            utterance: str | None = None
+
+        schema = _RoleplayAction.model_json_schema()
+
+        with self.test(variables=variables) as session:
+            try:
+                events_before = len(session._events)
+                while True:
+                    session.wait_for_turn()
+
+                    for event in session._events[events_before:]:
+                        if isinstance(event, BotTTS):
+                            logger.info("(Roleplay Session) [agent]: %s", event.transcript)
+                    events_before = len(session._events)
+
+                    transcript = session.get_transcript()
+
+                    prompt = f"""{roleplay_prompt}
+
+You are roleplaying as a caller on a phone call. Decide what to do next based on the conversation so far.
+
+Conversation:
+{transcript if transcript else "(The agent has not spoken yet)"}
+
+Choose "speak" and provide your next utterance, or choose "hangup" if the conversation has naturally concluded."""
+
+                    result = _generate(prompt, json_schema=schema)
+                    action = _RoleplayAction.model_validate_json(result)
+
+                    if action.action == "hangup":
+                        logger.info("(Roleplay Session) [caller hangs up]")
+                        break
+
+                    if action.action == "speak" and action.utterance:
+                        logger.info("(Roleplay Session) [caller]: %s", action.utterance)
+                        session.say(action.utterance)
+            except ConnectionClosedOK:
+                logger.info("Roleplay session ended by server.")
+
+            for event in session._events[events_before:]:
+                if isinstance(event, BotTTS):
+                    logger.info("(Roleplay Session) [agent]: %s", event.transcript)
+
+        return session
+
+    @preview("Agent Testing")
+    def chat(self, variables=None) -> None:
+        """Start an interactive terminal chat session with the agent.
+
+        Launches a curses TUI with a scrolling conversation panel and an input
+        line. Agent speech and SDK log output appear in real time without waiting
+        for the user to finish typing. Press Ctrl+C or let the agent end the
+        session to exit.
+
+        Args:
+            variables: Optional dict of initial call variables passed to the agent.
+        """
+        import curses
+        import textwrap
+        import threading
+        from guava.testing.protocol import BotTTS
+
+        # Shared message log: (speaker, text, log-levelname or None).
+        # Written by both _reader (agent messages) and _TUILogHandler (log lines);
+        # read by _render on every frame. Protected by _lock.
+        _messages: list[tuple[str, str, str | None]] = []
+        _lock = threading.Lock()
+        _done = threading.Event()  # set when the session ends or the reader errors
+
+        with self.test(variables=variables) as session:
+            def _reader():
+                # Background thread: pulls events from the test session WebSocket
+                # and appends agent speech to _messages. Sets _done on any error
+                # or connection close so the render loop can exit cleanly.
+                try:
+                    while not _done.is_set():
+                        event = session.recv()
+                        if isinstance(event, BotTTS):
+                            with _lock:
+                                _messages.append(("agent", event.transcript, None))
+                except Exception:
+                    _done.set()
+
+            def _render(stdscr):
+                # curses.wrapper calls this with a fully-initialized screen (stdscr).
+                # Layout: rows 0..(height-3) = scrolling conversation; row height-2 =
+                # separator; row height-1 = input prompt.
+
+                curses.use_default_colors()  # lets -1 mean "terminal default background"
+                curses.start_color()
+                curses.init_pair(1, curses.COLOR_CYAN, -1)    # agent
+                curses.init_pair(2, curses.COLOR_GREEN, -1)   # you
+                curses.init_pair(3, curses.COLOR_YELLOW, -1)  # WARNING
+                curses.init_pair(4, curses.COLOR_RED, -1)     # ERROR / CRITICAL
+
+                curses.curs_set(1)
+                # halfdelay(2): getch blocks for up to 200ms then returns -1.
+                # This lets the render loop tick at ~5fps so agent messages appear
+                # promptly without busy-spinning while the user is typing.
+                curses.halfdelay(2)
+
+                # Swap existing stream handlers for our TUI handler so log output
+                # doesn't corrupt the curses display.
+                root_logger = logging.getLogger()
+                tui_handler = _TUILogHandler(_messages, _lock)
+                original_handlers = root_logger.handlers[:]
+                for h in original_handlers:
+                    root_logger.removeHandler(h)
+                root_logger.addHandler(tui_handler)
+
+                reader_thread = threading.Thread(target=_reader, daemon=True)
+                reader_thread.start()
+
+                input_buf = ""  # characters typed by the user since last Enter
+
+                try:
+                    while True:
+                        height, width = stdscr.getmaxyx()
+                        conv_height = max(1, height - 2)  # rows available for conversation
+
+                        stdscr.erase()  # clear the screen before redrawing each frame
+
+                        with _lock:
+                            msgs = list(_messages)
+
+                        # Word-wrap every message into terminal-width lines, carrying
+                        # the speaker and level through so the renderer can color them.
+                        lines: list[tuple[str, str, str | None]] = []  # (line_text, speaker, level)
+                        for speaker, text, level in msgs:
+                            prefix = f"[{speaker}]: " if speaker != "system" else ""
+                            wrapped = textwrap.wrap(
+                                text,
+                                width=max(1, width - 1),
+                                initial_indent=prefix,
+                                subsequent_indent=" " * len(prefix),
+                            ) or [prefix]
+                            for line in wrapped:
+                                lines.append((line, speaker, level))
+
+                        # Show only the last conv_height lines (auto-scroll to bottom).
+                        visible = lines[max(0, len(lines) - conv_height):]
+                        for i, (line, speaker, level) in enumerate(visible[:conv_height]):
+                            if speaker == "agent":
+                                attr = curses.color_pair(1)
+                            elif speaker == "you":
+                                attr = curses.color_pair(2)
+                            elif level in ("ERROR", "CRITICAL"):
+                                attr = curses.color_pair(4) | (curses.A_BOLD if level == "CRITICAL" else 0)
+                            elif level == "WARNING":
+                                attr = curses.color_pair(3)
+                            else:  # DEBUG / INFO
+                                attr = curses.A_DIM
+                            try:
+                                stdscr.addstr(i, 0, line[:width - 1], attr)
+                            except curses.error:
+                                pass
+
+                        # Draw the separator and input line at the bottom.
+                        prompt = "[you]: "
+                        display = prompt + input_buf
+                        try:
+                            stdscr.addstr(height - 2, 0, "─" * (width - 1), curses.A_DIM)
+                            stdscr.addstr(height - 1, 0, display[:width - 1], curses.color_pair(2))
+                            stdscr.move(height - 1, min(len(display), width - 1))
+                        except curses.error:
+                            pass
+
+                        stdscr.refresh()  # flush everything to the terminal at once
+
+                        if _done.is_set():
+                            try:
+                                stdscr.addstr(height - 1, 0, "Session ended. Press any key to exit."[:width - 1])
+                            except curses.error:
+                                pass
+                            stdscr.refresh()
+                            while stdscr.getch() == -1:  # loop until a real key arrives
+                                pass
+                            return
+
+                        ch = stdscr.getch()
+                        if ch == -1:
+                            continue  # halfdelay timeout — just re-render
+                        elif ch in (curses.KEY_ENTER, 10, 13):
+                            utterance = input_buf.strip()
+                            if utterance:
+                                with _lock:
+                                    _messages.append(("you", utterance, None))
+                                session.say(utterance)
+                            input_buf = ""
+                        elif ch in (curses.KEY_BACKSPACE, 127, 8):  # terminals send different codes
+                            input_buf = input_buf[:-1]
+                        elif ch == 3:  # Ctrl+C
+                            return
+                        elif 32 <= ch < 127:  # printable ASCII
+                            input_buf += chr(ch)
+                finally:
+                    # Always restore the original log handlers, even if curses crashes.
+                    root_logger.removeHandler(tui_handler)
+                    for h in original_handlers:
+                        root_logger.addHandler(h)
+
+            try:
+                curses.wrapper(_render)
+            except KeyboardInterrupt:
+                pass
+
+    @preview("Agent Testing")
+    def patch(self) -> "Agent":
+        """Return a copy of this agent with independently overridable callbacks.
+
+        Use this in tests to register alternative handlers on the copy without
+        affecting the original agent.
+
+        Returns:
+            A new Agent instance.
+        """
+        cloned = copy(self)
+
+        # Callback dictionaries need to be cloned one level deeper.
+        cloned._on_task_complete_handlers = self._on_task_complete_handlers.copy()
+        cloned._on_action_handlers = self._on_action_handlers.copy()
+        cloned._search_query_handlers = self._search_query_handlers.copy()
+        
+        return cloned
+
+    @preview("Agent Testing")
+    @contextmanager
+    def test(self, variables=None) -> Iterator[TestSession]:
+        """Context manager that runs the agent against a live test session.
+
+        Connects to the Guava test endpoint, starts the agent's call handling,
+        and yields a TestSession for driving the conversation programmatically.
+
+        Args:
+            variables: Optional dict of initial call variables passed to the agent.
+
+        Yields:
+            A TestSession. Call ``session.say()`` to inject caller utterances,
+            ``session.wait_for_turn()`` to block until the agent finishes speaking,
+            ``session.evaluate()`` to assert pass/fail criteria, or
+            ``session.get_transcript()`` to get the transcript.
+        """
+        from guava.testing.protocol import SessionStarted
+        from guava.testing.session import TestSession
+
+        call_thread = None
+        try:
+            with ws_connect(
+                self._client.get_websocket_url("v1/test-agent"),
+                additional_headers=self._client._get_headers(),
+                open_timeout=10,
+                close_timeout=10,
+            ) as ws:
+                session_started = SessionStarted.model_validate_json(ws.recv())
+
+                test_session = TestSession(ws)
+                call_thread = threading.Thread(
+                    target=self._attach_to_call,
+                    args=(session_started.session_id, PSTNCallInfo(from_number=None, to_number="+15555555555")),
+                    kwargs={"initial_variables": variables or {}, "test_session": test_session},
+                    daemon=True,
+                )
+                call_thread.start()
+
+                yield test_session
+        finally:
+            if call_thread:
+                call_thread.join()

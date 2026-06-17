@@ -34,7 +34,7 @@ class ChromaVectorStore(VectorStore):
             import chromadb as _chromadb
         except ImportError:
             raise ImportError(
-                "chromadb is not installed. Run: pip install 'gridspace-guava[chromadb]'"
+                "chromadb is not installed. Run: pip install 'guava-sdk[chromadb]'"
             ) from None
         if path is None:
             self._db = _chromadb.Client()  # ty: ignore[unresolved-attribute]

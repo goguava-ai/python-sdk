@@ -1,15 +1,14 @@
 import json
-import os
 from datetime import date, timedelta
 from typing import Literal
-from urllib.parse import urljoin
 
 import httpx
 from pydantic import BaseModel, Field, create_model
 
 from guava.agent import SuggestedAction
 from guava.telemetry import telemetry_client
-from guava.utils import check_response, get_base_url
+from guava.utils import check_response
+from guava import Client
 
 
 def _generate(prompt: str, *, json_schema: dict | None = None) -> str:
@@ -32,10 +31,12 @@ def _generate(prompt: str, *, json_schema: dict | None = None) -> str:
     if json_schema is not None:
         payload["json_schema"] = json_schema
 
+    client = Client()
+
     r = httpx.post(
-        urljoin(get_base_url(), "v1/llm/generate"),
+        client.get_http_url("v1/llm/generate"),
         json=payload,
-        headers={"Authorization": f"Bearer {os.environ['GUAVA_API_KEY']}"},
+        headers=client._get_headers(),
         timeout=60.0,
     )
     check_response(r)

@@ -5,10 +5,16 @@ from datetime import datetime
 
 import uuid
 import warnings
+import logging
+
+logger = logging.getLogger("guava.types")
 
 E164PhoneNumber = Annotated[str, StringConstraints(pattern=r"^\+[1-9]\d{1,14}$")]
 
 DTMFDigit = Literal["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "*", "#", "A", "B", "C", "D"]
+
+# Why a bot session ended. Surfaced to user code via Call.termination_reason.
+TerminationReason = Literal["user-hangup", "bot-hangup", "bot-failure", "bot-transfer", "voicemail"]
 
 # modality options for campaign agentic outreach
 # NOTE: "rcs" is implemented (Twilio RCS sender, inbound webhook, fallback to SMS) but has not
@@ -58,7 +64,7 @@ class Field(BaseModel):
         if self.field_type == 'datetime':
             raise NotImplementedError("Datetime collection is not yet implemented.")
         if self.field_type == 'calendar_slot':
-            print("NOTE: For calendar_slot, choices / choice_generator must return ISO-8601 formatted datetimes: YYYY-MM-ddTHH:mm")
+            logger.info("NOTE: For calendar_slot, choices / choice_generator must return ISO-8601 formatted datetimes: YYYY-MM-ddTHH:mm")
             if self.choices:
                 # Catch any non-isoformatted initial choices
                 _ = [datetime.fromisoformat(x) for x in self.choices]

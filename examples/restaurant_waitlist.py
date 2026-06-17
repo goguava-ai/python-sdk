@@ -9,7 +9,7 @@ import logging
 
 from guava import Agent
 from guava import logging_utils
-from guava.examples import example_data
+from guava.examples import get_agent_number
 
 logger = logging.getLogger("thai_palace")
 
@@ -72,14 +72,17 @@ if __name__ == "__main__":
     )
     group.add_argument("--local", action="store_true", help="Start a local call.")
     group.add_argument("--sip", metavar="SIP_CODE", help="Listen on a SIP code 'guavasip-...'.")
+    group.add_argument("--chat", action="store_true", help="Start an interactive terminal chat.")
     args = parser.parse_args()
 
     # Every Agent can be attached to one of many different channels.
     if args.phone is not None:
-        agent.listen_phone(args.phone or example_data.get_phone_number())
+        agent.listen_phone(args.phone or get_agent_number())
     elif args.webrtc is not None:
         agent.listen_webrtc(args.webrtc or None)
     elif args.sip:
         agent.listen_sip(args.sip)
+    elif args.chat:
+        agent.chat()
     else:
         agent.call_local()

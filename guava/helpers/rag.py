@@ -205,15 +205,27 @@ class DocumentQA:
         dental.ask("What is the copay?")        # only searches dental docs
         restaurant.ask("Do you have vegan?")    # only searches restaurant docs
 
-    Example (local mode)::
+    Example (local mode, Gemini)::
 
         from google import genai
         from guava.helpers.lancedb import LanceDBStore
-        from guava.helpers.vertexai import VertexAIEmbedding, VertexAIGeneration
+        from guava.helpers.genai import GenAIEmbedding, GenAIGeneration
 
         client = genai.Client(vertexai=True, project="my-project", location="us-central1")
-        store = LanceDBStore("gs://my-bucket/lancedb", embedding_model=VertexAIEmbedding(client=client))
-        qa = DocumentQA(store=store, generation_model=VertexAIGeneration(client=client))
+        store = LanceDBStore("gs://my-bucket/lancedb", embedding_model=GenAIEmbedding(client=client))
+        qa = DocumentQA(store=store, generation_model=GenAIGeneration(client=client))
+        qa.upsert_document("policy", my_text)
+        answer = qa.ask("What is the deductible?")
+
+    Example (local mode, OpenAI)::
+
+        import openai
+        from guava.helpers.chromadb import ChromaVectorStore
+        from guava.helpers.openai import OpenAIEmbedding, OpenAIGeneration
+
+        client = openai.OpenAI(api_key="sk-...")
+        store = ChromaVectorStore(embedding_model=OpenAIEmbedding(client=client))
+        qa = DocumentQA(store=store, generation_model=OpenAIGeneration(client=client))
         qa.upsert_document("policy", my_text)
         answer = qa.ask("What is the deductible?")
 
@@ -288,7 +300,8 @@ class DocumentQA:
             if generation_model is None:
                 raise ValueError(
                     "In local mode, provide an explicit 'generation_model' "
-                    "(e.g. VertexAIGeneration(client=your_client))."
+                    "(e.g. GenAIGeneration(client=your_client) or "
+                    "OpenAIGeneration(client=your_client))."
                 )
             assert store is not None
             self.store = store

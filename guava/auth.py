@@ -9,7 +9,7 @@ import httpx
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone, timedelta
 
-from .utils import cli_config, check_response, get_base_url
+from .utils import cli_config_path, check_response, get_base_url
 from .threading_utils import LazySingleton
 
 logger = logging.getLogger("guava.auth")
@@ -45,8 +45,18 @@ TOKEN_REFRESH_BUFFER = timedelta(minutes=1)
 
 
 class CLIAuth(AuthStrategy):
+    @staticmethod
+    def exists() -> bool:
+        # If the CLI config doesn't exist, skip CLI auth.
+        if not cli_config_path().exists():
+            return False
+        
+        # If there is no refresh_token, skip CLI auth.
+        config = json.loads(cli_config_path().read_text())
+        return "refresh_token" in config
+    
     def __init__(self):
-        config = json.loads(cli_config().read_text())
+        config = json.loads(cli_config_path().read_text())
 
         self._access_token = config["access_token"]
         self._expires_at = datetime.fromtimestamp(config["expires_at"], tz=timezone.utc)

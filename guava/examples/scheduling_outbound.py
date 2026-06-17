@@ -1,10 +1,10 @@
 import logging
-import os
 import argparse
 import guava
 
 from guava import logging_utils, Agent
 from guava.examples.example_data import MOCK_APPOINTMENTS
+from guava.examples import get_agent_number
 from guava.helpers.llm import DatetimeFilter
 
 logger = logging.getLogger("guava.examples.property_insurance")
@@ -25,9 +25,7 @@ def on_call_start(call: guava.Call):
 
 @agent.on_reach_person
 def on_reach_person(call: guava.Call, outcome: str) -> None:
-    if outcome == "unavailable":
-        call.hangup("Apologize for your mistake and hang up the call.")
-    elif outcome == "available":
+    if outcome == "available":
         call.set_task(
             "schedule_appointment",
             checklist=[
@@ -41,6 +39,8 @@ def on_reach_person(call: guava.Call, outcome: str) -> None:
                 "Tell them their appointment has been confirmed and answer any questions before ending the call.",
             ],
         )
+    else:
+        call.hangup("Appropriately end the call.")
 
 
 @agent.on_search_query("appointment_time")
@@ -57,12 +57,22 @@ if __name__ == "__main__":
     logging_utils.configure_logging()
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("phone", type=str, help="Phone number to call.")
-    parser.add_argument("name", nargs="?", help="Name of the patient", default="Benjamin Buttons")
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("--phone", metavar="PHONE_NUMBER", help="Call a phone number.")
+    group.add_argument("--local", action="store_true", help="Start a local call (for testing).")
+    group.add_argument(
+        "--chat", action="store_true", help="Start a local chat session (for testing)."
+    )
+    parser.add_argument("--name", default="Benjamin Buttons", help="Name of the patient.")
     args = parser.parse_args()
 
-    agent.call_phone(
-        from_number=os.environ["GUAVA_AGENT_NUMBER"],
-        to_number=args.phone,
-        variables={"patient_name": args.name},
-    )
+    if args.phone:
+        agent.call_phone(
+            from_number=get_agent_number(),
+            to_number=args.phone,
+            variables={"patient_name": args.name},
+        )
+    elif args.chat:
+        agent.chat({"patient_name": args.name})
+    else:
+        agent.call_local({"patient_name": args.name})

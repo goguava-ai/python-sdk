@@ -1,6 +1,6 @@
 [project]
 name = "guava-sdk"
-version = "0.27.0"
+version = "0.30.0"
 description = "The official Python SDK for building Guava voice agents."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -16,6 +16,8 @@ lancedb = ["lancedb>=0.20.0"]
 pgvector = ["psycopg[binary]>=3.2.0", "pgvector>=0.4.0", "numpy>=1.26.0"]
 chromadb = ["chromadb>=0.6.0"]
 pinecone = ["pinecone>=5.0.0"]
+genai = ["google-genai>=1.55.0"]
+openai = ["openai>=2.8.1"]
 
 [dependency-groups]
 dev = [
@@ -26,10 +28,10 @@ dev = [
     "numpy>=2.2.6",
     "openai>=2.8.1",
     "ruff>=0.14.6",
-    "semgrep>=1.152.0",
+    "semgrep>=1.165.0",
     "simple503>=0.4.0",
     "sounddevice>=0.5.5",
-    "ty>=0.0.21",
+    "ty>=0.0.43",
     "uvicorn>=0.40.0",
 ]
 

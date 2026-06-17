@@ -24,5 +24,6 @@ def create_openai_client():
     import openai
 
     return openai.OpenAI(
-        api_key=os.environ["GUAVA_API_KEY"], base_url=urljoin(get_base_url(), "openai/v1")
+        api_key=os.environ["GUAVA_API_KEY"],  # nosemgrep: python-no-guava-api-key-env
+        base_url=urljoin(get_base_url(), "openai/v1"),
     )

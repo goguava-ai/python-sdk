@@ -10,9 +10,10 @@ class PgVectorStore(VectorStore):
 
     Requires a PostgreSQL database with the ``vector`` extension available.
 
-    An ``embedding_model`` is required. To use Vertex AI embeddings, construct a
-    ``VertexAIEmbedding`` with your own client and pass it here — Guava helpers
-    never create API clients on your behalf.
+    An ``embedding_model`` is required. Any ``EmbeddingModel`` works
+    (``GenAIEmbedding``, ``OpenAIEmbedding``, ``PineconeInferenceEmbedding``,
+    or a custom subclass) — Guava helpers never create API clients on your
+    behalf.
 
     Args:
         db_url: PostgreSQL connection string.

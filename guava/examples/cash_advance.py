@@ -7,7 +7,7 @@ from guava import Field, Agent, logging_utils
 from dataclasses import dataclass
 from datetime import date
 from difflib import SequenceMatcher
-from guava.examples import example_data
+from guava.examples import get_agent_number
 
 logger = logging.getLogger("cash_advance")
 
@@ -149,7 +149,7 @@ if __name__ == "__main__":
 
     # Every Agent can be attached to one of many different channels.
     if args.phone is not None:
-        agent.listen_phone(args.phone or example_data.get_phone_number())
+        agent.listen_phone(args.phone or get_agent_number())
     elif args.webrtc is not None:
         agent.listen_webrtc(args.webrtc or None)
     elif args.sip:

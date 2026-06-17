@@ -17,9 +17,9 @@ DEFAULT_BASE_URL: str = "https://app.goguava.ai/"
 def get_base_url() -> str:
     if "GUAVA_BASE_URL" in os.environ:
         return os.environ["GUAVA_BASE_URL"]
-    elif cli_config().exists():
+    elif cli_config_path().exists():
         # Try to read the base_url from the CLI config.
-        config = json.loads(cli_config().read_text())
+        config = json.loads(cli_config_path().read_text())
         return config.get("base_url", DEFAULT_BASE_URL)
     else:
         return DEFAULT_BASE_URL
@@ -130,7 +130,7 @@ def platform_config_dir() -> Path:
 
     return home / ".config"
 
-def cli_config() -> Path:
+def cli_config_path() -> Path:
     return platform_config_dir() / "guava" / "config.json"
 
 def download_and_check(url: str, destination: Path, sha256sum: str) -> None:

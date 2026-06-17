@@ -1,9 +1,14 @@
+"""
+This example attaches a political polling agent to an ongoing Guava campaign.
+
+To use this, first create a campaign from the dashboard or CLI and add contacts.
+Then, run this script with the campaign ID and the Agent will start making calls to
+those registered contacts.
+"""
+
 import argparse
-import os
 import guava
 import logging
-
-from guava.campaigns import create_or_update_campaign, Contact
 from guava import logging_utils, Agent, Field
 
 logger = logging.getLogger("guava.examples.polling_campaign")
@@ -29,9 +34,7 @@ def on_call_start(call: guava.Call):
 
 @agent.on_reach_person
 def on_reach_person(call: guava.Call, outcome: str) -> None:
-    if outcome == "unavailable":
-        call.hangup()
-    elif outcome == "available":
+    if outcome == "available":
         first_name = call.get_variable("first_name")
         call.set_task(
             "political_poll",
@@ -66,6 +69,8 @@ def on_reach_person(call: guava.Call, outcome: str) -> None:
                 ),
             ],
         )
+    else:
+        call.hangup("Appropriately end the call.")
 
 
 @agent.on_task_complete("political_poll")
@@ -78,39 +83,13 @@ def on_poll_complete(call: guava.Call):
 
 if __name__ == "__main__":
     logging_utils.configure_logging()
-
-    def parse_contact_arg(s: str) -> Contact:
-        name, _, phone = s.partition(":")
-        return Contact(phone_number=phone.strip(), data={"first_name": name.strip()})
-
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(
+        description="Attach an example political polling agent to a campaign."
+    )
     parser.add_argument(
-        "--contact",
-        action="append",
-        type=parse_contact_arg,
-        dest="contacts",
-        metavar="NAME:PHONE",
-        required=True,
-        help='Contact to call, e.g. "Alice:+13235550102"',
+        "campaign_code",
+        help="The campaign code to attach to (e.g. gcp-...). Use the CLI or dashboard to create a campaign.",
     )
     args = parser.parse_args()
 
-    campaign = create_or_update_campaign(
-        "political-poll-example",
-        origin_phone_numbers=[os.environ["GUAVA_AGENT_NUMBER"]],
-        # Calling window times are interpreted in the campaign timezone (default: America/Los_Angeles).
-        calling_windows=[
-            {"day": day, "start_time": "09:00", "end_time": "21:00"}
-            for day in ["monday", "tuesday", "wednesday", "thursday", "friday"]
-        ],
-        start_date="2026-04-01",
-        max_concurrency=3,
-    )
-    logger.info("Created campaign ID %s.", campaign.id)
-
-    result = campaign.upload_contacts(
-        args.contacts, allow_duplicates=True, accepted_terms_of_service=True
-    )
-    logger.info("Contact upload result: %s", result)
-
-    agent.attach_campaign(campaign=campaign)
+    agent.attach_campaign(args.campaign_code)

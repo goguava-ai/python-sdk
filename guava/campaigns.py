@@ -94,93 +94,37 @@ def list_campaigns() -> list[Campaign]:
     return [Campaign(c) for c in response.json()]
 
 
-@deprecated("get_or_create_campaign")
-def get_or_create_campaign(
-    campaign_name: str,
-    origin_phone_numbers: Optional[list] = None,
-    calling_windows: Optional[list] = None,
-    start_date: Optional[str] = None,
-    max_concurrency: Optional[int] = None,
-    max_attempts: Optional[int] = None,
-    timezone: Optional[str] = None,
-    end_date: Optional[str] = None,
-    description: str | None = None,
-) -> Campaign:
-    """
-    calling_windows: list of {"day": 0-6, "start_time": "HH:MM", "end_time": "HH:MM"}
-    start_date / end_date: "YYYY-MM-DD"
-
-    origin_phone_numbers, calling_windows, and start_date are only required when
-    creating a new campaign. If the campaign already exists, only campaign_name is needed.
-    """
+def get_campaign_by_code(campaign_code: str) -> Campaign:
+    """Fetch an existing campaign by code."""
     client = Client()
+    response = httpx.get(
+        client.get_http_url(f'v1/campaigns/{campaign_code}'),
+        headers=client._get_headers(),
+    )
+    check_response(response)
+    return Campaign(response.json())
 
-    request_json: dict = {'name': campaign_name}
-    if origin_phone_numbers is not None:
-        request_json['origin_phone_numbers'] = origin_phone_numbers
-    if calling_windows is not None:
-        request_json['calling_windows'] = calling_windows
-    if start_date is not None:
-        request_json['start_date'] = start_date
-    if end_date is not None:
-        request_json['end_date'] = end_date
-    if max_concurrency is not None:
-        request_json['max_concurrency'] = max_concurrency
-    if max_attempts is not None:
-        request_json['max_attempts'] = max_attempts
-    if timezone is not None:
-        request_json['timezone'] = timezone
-    if description is not None:
-        request_json['description'] = description
+
+def upload_contacts(
+    campaign_code: str,
+    contacts: list[Contact],
+    allow_duplicates: bool = False,
+    accepted_terms_of_service: bool = False,
+    outreach_modalities: list[OutreachModality] | None = None,
+) -> dict:
+    if outreach_modalities:
+        for contact in contacts:
+            contact.outreach_modalities = contact.outreach_modalities or outreach_modalities
+
+    client = Client()
     response = httpx.post(
-        client.get_http_url('v1/campaigns'), json=request_json,
+        client.get_http_url(f'v2/campaigns/{campaign_code}/contacts'),
+        params={
+            'allow_duplicates': str(allow_duplicates).lower(),
+            'accepted_terms_of_service': str(accepted_terms_of_service).lower(),
+        },
+        json={'contacts': [c.model_dump() for c in contacts]},
         headers=client._get_headers(),
     )
     check_response(response)
-    return Campaign(response.json())
-
-
-def create_or_update_campaign(
-    campaign_name: str,
-    origin_phone_numbers: Optional[list] = None,
-    calling_windows: Optional[list] = None,
-    start_date: Optional[str] = None,
-    max_concurrency: Optional[int] = None,
-    max_attempts: Optional[int] = None,
-    timezone: Optional[str] = None,
-    end_date: Optional[str] = None,
-    description: str | None = None,
-) -> Campaign:
-    """
-    calling_windows: list of {"day": 0-6, "start_time": "HH:MM", "end_time": "HH:MM"}
-    start_date / end_date: "YYYY-MM-DD"
-
-    origin_phone_numbers, calling_windows, and start_date are only required when
-    creating a new campaign. If the campaign already exists, it will be updated
-    with the provided fields.
-    """
-    client = Client()
-
-    request_json: dict = {'name': campaign_name}
-    if origin_phone_numbers is not None:
-        request_json['origin_phone_numbers'] = origin_phone_numbers
-    if calling_windows is not None:
-        request_json['calling_windows'] = calling_windows
-    if start_date is not None:
-        request_json['start_date'] = start_date
-    if end_date is not None:
-        request_json['end_date'] = end_date
-    if max_concurrency is not None:
-        request_json['max_concurrency'] = max_concurrency
-    if max_attempts is not None:
-        request_json['max_attempts'] = max_attempts
-    if timezone is not None:
-        request_json['timezone'] = timezone
-    if description is not None:
-        request_json['description'] = description
-    response = httpx.put(
-        client.get_http_url('v1/campaigns'), json=request_json,
-        headers=client._get_headers(),
-    )
-    check_response(response)
-    return Campaign(response.json())
+    return response.json()

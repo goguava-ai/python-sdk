@@ -81,7 +81,7 @@ class PineconeVectorStore(VectorStore):
             from pinecone import Pinecone, ServerlessSpec  # ty: ignore[unresolved-import]
         except ImportError:
             raise ImportError(
-                "pinecone is not installed. Run: pip install 'gridspace-guava[pinecone]'"
+                "pinecone is not installed. Run: pip install 'guava-sdk[pinecone]'"
             ) from None
         self._pc = Pinecone(api_key=api_key) if api_key else Pinecone()
         self._embedding_model = embedding_model or PineconeInferenceEmbedding(pc=self._pc)

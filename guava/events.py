@@ -4,7 +4,7 @@ import warnings
 from typing_extensions import deprecated
 from typing import Union, Literal, get_args, Annotated, Any, Optional
 from pydantic import BaseModel, Field, TypeAdapter
-from .types import E164PhoneNumber, DTMFDigit
+from .types import E164PhoneNumber, DTMFDigit, TerminationReason
 
 class BaseEvent(BaseModel):
     sequence: int | None = None
@@ -112,7 +112,7 @@ class OutboundCallFailed(BaseEvent):
 
 class BotSessionEnded(BaseEvent):
     event_type: Literal["bot-session-ended"] = "bot-session-ended"
-    termination_reason: Literal["user-hangup", "bot-hangup", "bot-failure", "bot-transfer", "voicemail"]
+    termination_reason: TerminationReason
 
 class ChoiceQueryEvent(BaseEvent):
     event_type: Literal["choice-query"] = "choice-query"
@@ -130,7 +130,7 @@ class DTMFPressedEvent(BaseEvent):
 
 Event = Annotated[
     Union[
-        OutboundSessionStartedEvent,
+        OutboundSessionStartedEvent, # ty: ignore[deprecated]
         CallerSpeechEvent,
         AgentSpeechEvent,
         ErrorEvent,

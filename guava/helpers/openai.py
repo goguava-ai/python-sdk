@@ -1,27 +1,157 @@
+"""OpenAI integration for the Guava helpers.
+
+This module exposes two layers:
+
+- **RAG wrappers** (recommended): ``OpenAIEmbedding`` and ``OpenAIGeneration``
+  implement the ``EmbeddingModel`` / ``GenerationModel`` interfaces from
+  ``guava.helpers.rag``. Drop them into ``DocumentQA`` or any ``VectorStore``
+  that takes a custom embedder.
+
+- **Legacy LLM helpers** (deprecated): ``IntentRecognizer``,
+  ``IntentClarifier``, ``DatetimeFilter``, and the original OpenAI-vector-stores
+  ``DocumentQA``. Each emits a ``DeprecationWarning`` at construction time.
+  Migrate to ``guava.helpers.llm`` for the Guava-key-only path, or to the new
+  RAG wrappers in this module for direct OpenAI use.
+"""
+
 from __future__ import annotations
 
-import time
-import logging
 import hashlib
+import logging
+import time
 import warnings
 from datetime import date
-from pydantic import create_model, Field
-from typing import TYPE_CHECKING, Optional, Literal
-from . import beta
+from typing import TYPE_CHECKING, Literal, Optional
+
+from pydantic import Field, create_model
+
 from guava.telemetry import telemetry_client
+
+from . import beta
+from .rag import EmbeddingModel, GenerationModel
 
 if TYPE_CHECKING:
     import openai
 
-warnings.warn(
-    "guava.helpers.openai is deprecated and will be removed in a future release. "
-    "Please use guava.helpers.llm instead. If you would still like to use OpenAI models, "
-    "check the Guava docs for examples on how to configure your own OpenAI client.",
-    DeprecationWarning,
-    stacklevel=2,
+logger = logging.getLogger("guava.helpers.rag")
+
+_LEGACY_DEPRECATION_MESSAGE = (
+    "guava.helpers.openai.{name} is deprecated and will be removed in a future "
+    "release. For intent / datetime helpers, use guava.helpers.llm. "
+    "For OpenAI-backed RAG, use guava.helpers.openai.OpenAIEmbedding and "
+    "guava.helpers.openai.OpenAIGeneration with guava.helpers.rag.DocumentQA."
 )
 
-logger = logging.getLogger("guava.helpers.openai")
+
+def _warn_legacy(name: str) -> None:
+    warnings.warn(
+        _LEGACY_DEPRECATION_MESSAGE.format(name=name),
+        DeprecationWarning,
+        stacklevel=3,
+    )
+
+
+# ── New RAG wrappers ──────────────────────────────────────────────────────────
+
+DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small"
+DEFAULT_EMBEDDING_DIM = 1536
+DEFAULT_QA_MODEL = "gpt-5-mini"
+
+
+@telemetry_client.track_class()
+class OpenAIEmbedding(EmbeddingModel):
+    """Embedding via the OpenAI `embeddings` API.
+
+    Args:
+        client: A configured `openai.OpenAI` instance.
+        model: OpenAI embedding model name (default `text-embedding-3-small`).
+        dimensionality: Output vector size. For `text-embedding-3-*` models,
+            values smaller than the native size cause OpenAI to truncate via
+            the `dimensions` parameter.
+    """
+
+    def __init__(
+        self,
+        *,
+        client,
+        model: str = DEFAULT_EMBEDDING_MODEL,
+        dimensionality: int = DEFAULT_EMBEDDING_DIM,
+    ):
+        try:
+            import openai  # noqa: F401
+        except ImportError:
+            raise ImportError(
+                "openai is not installed. Run: pip install 'guava-sdk[openai]'"
+            ) from None
+        self._client = client
+        self._model = model
+        self._dimensionality = dimensionality
+
+    def ndims(self) -> int:
+        return self._dimensionality
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        return self._embed(texts)
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        t0 = time.perf_counter()
+        result = self._embed(texts)
+        logger.info("embed_documents: %d text(s) in %.3fs", len(texts), time.perf_counter() - t0)
+        return result
+
+    def embed_query(self, text: str) -> list[float]:
+        t0 = time.perf_counter()
+        result = self._embed([text])[0]
+        logger.info("embed_query in %.3fs", time.perf_counter() - t0)
+        return result
+
+    def _embed(self, texts: list[str]) -> list[list[float]]:
+        kwargs: dict = {"model": self._model, "input": texts}
+        # Denylist `ada-002` (the one OpenAI model that rejects `dimensions=`)
+        if "ada-002" not in self._model:
+            kwargs["dimensions"] = self._dimensionality
+        response = self._client.embeddings.create(**kwargs)
+        return [item.embedding for item in response.data]
+
+
+@telemetry_client.track_class()
+class OpenAIGeneration(GenerationModel):
+    """QA generation via the OpenAI `chat.completions` API.
+
+    Args:
+        client: A configured `openai.OpenAI` instance.
+        model: OpenAI chat model name (default `gpt-5-mini`).
+    """
+
+    def __init__(self, *, client, model: str = DEFAULT_QA_MODEL):
+        try:
+            import openai  # noqa: F401
+        except ImportError:
+            raise ImportError(
+                "openai is not installed. Run: pip install 'guava-sdk[openai]'"
+            ) from None
+        self._client = client
+        self._model = model
+
+    def generate(self, prompt: str, *, system_instruction: str | None = None) -> str:
+        t0 = time.perf_counter()
+        messages: list[dict] = []
+        if system_instruction:
+            messages.append({"role": "system", "content": system_instruction})
+        messages.append({"role": "user", "content": prompt})
+        response = self._client.chat.completions.create(
+            model=self._model,
+            messages=messages,
+        )
+        logger.info("chat.completions.create: %.3fs", time.perf_counter() - t0)
+        return response.choices[0].message.content or ""
+
+
+# ── Deprecated legacy helpers ─────────────────────────────────────────────────
+# These wrap raw OpenAI calls and fall back to the Guava-proxy beta client when
+# no explicit client is provided. Each emits a DeprecationWarning at __init__.
+# Migrate intent/datetime helpers to guava.helpers.llm; migrate the legacy
+# DocumentQA to guava.helpers.rag.DocumentQA with OpenAIGeneration above.
 
 
 @telemetry_client.track_class()
@@ -31,10 +161,10 @@ class IntentRecognizer:
         intent_choices: list[str] | dict[str, str],
         client: Optional[openai.OpenAI] = None,
     ):
+        _warn_legacy("IntentRecognizer")
         if client:
             self.client = client
         else:
-            # TODO: Remove after beta.
             logger.debug("Creating beta OpenAI client.")
             self.client = beta.create_openai_client()
 
@@ -66,7 +196,7 @@ Possible Choices: {[x for x in self.intent_choices]}.
         response = self.client.responses.parse(
             model="gpt-5-mini",
             input=input_prompt.strip(),
-            text_format=self.choice_model,  # type: ignore
+            text_format=self.choice_model,
             reasoning={"effort": "low"},
         )
         return response.output_parsed.caller_choice  # type: ignore
@@ -79,10 +209,10 @@ class IntentClarifier:
         intent_choices: list[str] | dict[str, str],
         client: Optional[openai.OpenAI] = None,
     ):
+        _warn_legacy("IntentClarifier")
         if client:
             self.client = client
         else:
-            # TODO: Remove after beta.
             logger.debug("Creating beta OpenAI client.")
             self.client = beta.create_openai_client()
 
@@ -142,7 +272,7 @@ Rules:
         response = self.client.responses.parse(
             model="gpt-5-mini",
             input=input_prompt.strip(),
-            text_format=self.clarification_model,  # type: ignore
+            text_format=self.clarification_model,
             reasoning={"effort": "low"},
         )
 
@@ -157,10 +287,10 @@ class DocumentQA:
         document: str,
         client: Optional[openai.OpenAI] = None,
     ):
+        _warn_legacy("DocumentQA")
         if client:
             self.client = client
         else:
-            # TODO: Remove after beta.
             logger.debug("Creating beta OpenAI client.")
             self.client = beta.create_openai_client()
 
@@ -214,10 +344,10 @@ class DocumentQA:
 @telemetry_client.track_class()
 class DatetimeFilter:
     def __init__(self, source_list: list[str], client: Optional[openai.OpenAI] = None):
+        _warn_legacy("DatetimeFilter")
         if client:
             self.client = client
         else:
-            # TODO: Remove after beta.
             logger.debug("Creating beta OpenAI client.")
             self.client = beta.create_openai_client()
 
@@ -261,7 +391,7 @@ You must return at most {max_results} options per list.
         response = self.client.responses.parse(
             model="gpt-5-mini",
             input=prompt,  # type: ignore
-            text_format=self.filter_model,  # type: ignore
+            text_format=self.filter_model,
             reasoning={"effort": "medium"},
         )
 

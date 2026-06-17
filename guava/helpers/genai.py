@@ -1,21 +1,171 @@
+"""Google Gemini integration for the Guava helpers.
+
+This module exposes two layers:
+
+- **RAG wrappers** (recommended): ``GenAIEmbedding`` and ``GenAIGeneration``
+  implement the ``EmbeddingModel`` / ``GenerationModel`` interfaces from
+  ``guava.helpers.rag``. Drop them into ``DocumentQA`` or any ``VectorStore``
+  that takes a custom embedder.
+
+- **Legacy LLM helpers** (deprecated): ``IntentRecognizer``,
+  ``DateRangeParser``, ``DatetimeFilter``. Each emits a ``DeprecationWarning`` at
+  construction time. Migrate to ``guava.helpers.llm`` for the Guava-key-only
+  path, or call ``google.genai`` directly inside your callback if you need a
+  custom Gemini-driven helper.
+"""
+
 from __future__ import annotations
 
+import logging
+import time
 import warnings
-
 from datetime import date, timedelta
-from typing import TYPE_CHECKING, Optional, Literal
-from pydantic import BaseModel, create_model, Field
+from typing import TYPE_CHECKING, Literal, Optional
+
+from pydantic import BaseModel, Field, create_model
+
+from guava.telemetry import telemetry_client
+
+from .rag import EmbeddingModel, GenerationModel
 
 if TYPE_CHECKING:
     from google import genai
 
-warnings.warn(
-    "guava.helpers.genai is deprecated and will be removed in a future release. "
-    "Please use guava.helpers.llm instead. If you would still like to use Gemini models, "
-    "check the Guava docs for examples on how to configure your own Gemini client.",
-    DeprecationWarning,
-    stacklevel=2,
+logger = logging.getLogger("guava.helpers.rag")
+
+_LEGACY_DEPRECATION_MESSAGE = (
+    "guava.helpers.genai.{name} is deprecated and will be removed in a future "
+    "release. For intent / datetime helpers, use guava.helpers.llm. "
+    "For Gemini-backed RAG, use guava.helpers.genai.GenAIEmbedding and "
+    "guava.helpers.genai.GenAIGeneration with guava.helpers.rag.DocumentQA."
 )
+
+
+def _warn_legacy(name: str) -> None:
+    warnings.warn(
+        _LEGACY_DEPRECATION_MESSAGE.format(name=name),
+        DeprecationWarning,
+        stacklevel=3,
+    )
+
+
+# ── New RAG wrappers ──────────────────────────────────────────────────────────
+
+DEFAULT_EMBEDDING_MODEL = "gemini-embedding-001"
+DEFAULT_EMBEDDING_DIM = 768
+DEFAULT_QA_MODEL = "gemini-2.5-flash"
+# Disable thinking by default for `gemini-2.5-flash`. Set thinking_budget=None
+# on a non-thinking model (e.g. gemini-1.5-flash) to avoid an SDK error.
+DEFAULT_THINKING_BUDGET = 0
+
+
+@telemetry_client.track_class()
+class GenAIEmbedding(EmbeddingModel):
+    """Embedding via Google Gemini (Vertex AI or AI Studio).
+
+    Uses different task types for document indexing vs. query search, which
+    improves retrieval quality over using a single generic embedding.
+
+    Args:
+        client: A configured `google.genai.Client` instance.
+        model: Gemini embedding model name.
+        dimensionality: Output vector size.
+    """
+
+    def __init__(
+        self,
+        *,
+        client,
+        model: str = DEFAULT_EMBEDDING_MODEL,
+        dimensionality: int = DEFAULT_EMBEDDING_DIM,
+    ):
+        self._model = model
+        self._dimensionality = dimensionality
+        self._client = client
+
+    def ndims(self) -> int:
+        return self._dimensionality
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        return self._embed(texts, "RETRIEVAL_DOCUMENT")
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        t0 = time.perf_counter()
+        result = self._embed(texts, "RETRIEVAL_DOCUMENT")
+        logger.info("embed_documents: %d text(s) in %.3fs", len(texts), time.perf_counter() - t0)
+        return result
+
+    def embed_query(self, text: str) -> list[float]:
+        t0 = time.perf_counter()
+        result = self._embed([text], "QUESTION_ANSWERING")[0]
+        logger.info("embed_query in %.3fs", time.perf_counter() - t0)
+        return result
+
+    def _embed(self, texts: list[str], task_type: str) -> list[list[float]]:
+        try:
+            from google import genai
+        except ImportError:
+            raise ImportError(
+                "google-genai is not installed. Run: pip install 'guava-sdk[genai]'"
+            ) from None
+
+        response = self._client.models.embed_content(
+            model=self._model,
+            contents=texts,
+            config=genai.types.EmbedContentConfig(
+                output_dimensionality=self._dimensionality,
+                task_type=task_type,
+            ),
+        )
+        return [e.values for e in response.embeddings]
+
+
+@telemetry_client.track_class()
+class GenAIGeneration(GenerationModel):
+    """QA generation via Google Gemini.
+
+    Args:
+        client: A configured `google.genai.Client` instance.
+        model: Gemini model name.
+        thinking_budget: Token budget for the model's internal thinking step.
+            Defaults to `0` (thinking disabled) for faster responses on
+            `gemini-2.5-flash`. Pass `None` to use the model's own default
+            (required for non-thinking models like `gemini-1.5-flash`, which
+            otherwise raise on `thinking_config`). Pass a positive integer
+            (e.g. `8192`) to allow extended thinking.
+    """
+
+    def __init__(
+        self,
+        *,
+        client,
+        model: str = DEFAULT_QA_MODEL,
+        thinking_budget: int | None = DEFAULT_THINKING_BUDGET,
+    ):
+        self._model = model
+        self._client = client
+        self._thinking_budget = thinking_budget
+
+    def generate(self, prompt: str, *, system_instruction: str | None = None) -> str:
+        t0 = time.perf_counter()
+        config: dict = {}
+        if system_instruction:
+            config["system_instruction"] = system_instruction
+        if self._thinking_budget is not None:
+            config["thinking_config"] = {"thinking_budget": self._thinking_budget}
+        response = self._client.models.generate_content(
+            model=self._model,
+            contents=prompt,
+            config=config or None,
+        )
+        logger.info("generate_content: %.3fs", time.perf_counter() - t0)
+
+        return response.text or ""
+
+
+# ── Deprecated legacy helpers ─────────────────────────────────────────────────
+# These wrap raw google.genai calls for the older intent / datetime workflows.
+# Each emits a DeprecationWarning at __init__. Migrate to guava.helpers.llm.
 
 
 class IntentRecognizer:
@@ -30,6 +180,7 @@ class IntentRecognizer:
     """
 
     def __init__(self, intent_choices: list[str] | dict[str, str], client: genai.Client):
+        _warn_legacy("IntentRecognizer")
         self.client = client
         self.intent_choices = intent_choices
         self.choice_model = create_model(
@@ -96,6 +247,7 @@ class DateRangeParser:
         client: genai.Client,
         model: str = "gemini-2.5-flash",
     ):
+        _warn_legacy("DateRangeParser")
         self.client = client
         self.model = model
         self._schema = _DateRangeModel.model_json_schema()
@@ -164,6 +316,7 @@ class DatetimeFilter:
         client: genai.Client,
         model: str = "gemini-2.5-flash",
     ):
+        _warn_legacy("DatetimeFilter")
         self.client = client
         self.model = model
         self.source_list = source_list

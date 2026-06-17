@@ -1,8 +1,8 @@
 # Guava Helpers Module
 
-The `guava.helpers` module provides high-level abstractions for Retrieval-Augmented Generation (RAG), vector storage, intent classification, datetime parsing, and real-time server communication. The LLM-backed helpers (`IntentRecognizer`, `DatetimeFilter`, `DateRangeParser`) call the Guava server using only a `GUAVA_API_KEY` — no third-party LLM credentials needed. RAG vector-store helpers (`pinecone`, `chromadb`, `lancedb`, `pgvector`, `vertexai`) require their own credentials by nature.
+The `guava.helpers` module provides high-level abstractions for Retrieval-Augmented Generation (RAG), vector storage, intent classification, datetime parsing, and real-time server communication. The LLM-backed helpers (`IntentRecognizer`, `DatetimeFilter`, `DateRangeParser`) call the Guava server using only a `GUAVA_API_KEY` — no third-party LLM credentials needed. RAG vector-store and embedding/generation helpers (`pinecone`, `chromadb`, `lancedb`, `pgvector`, `genai`, `openai`) require their own credentials by nature.
 
-> **Deprecated:** `helpers/openai.py`, `helpers/genai.py`, and `helpers/beta.py` are deprecated and will be removed in a future release. Migrate to `helpers/llm.py` for the Guava-key-only path. If you specifically want to plug raw OpenAI / Gemini calls into Guava callbacks, see `examples/integrations/openai` and `examples/integrations/genai` in the [guava-starter](https://github.com/gridspace/guava-starter) repo.
+> **Migration note:** The Gemini RAG wrappers previously named `VertexAIEmbedding` / `VertexAIGeneration` in `helpers/vertexai.py` are now `GenAIEmbedding` / `GenAIGeneration` in `helpers/genai.py`. The old names continue to import from `helpers.vertexai` for one release (with a `DeprecationWarning`); switch to `from guava.helpers.genai import GenAIEmbedding, GenAIGeneration` to silence the warning. The deprecated LLM-style classes (`IntentRecognizer`, `DateRangeParser`, `DatetimeFilter` in `helpers/genai.py`; `IntentRecognizer`, `IntentClarifier`, `DatetimeFilter`, the old file-search `DocumentQA` in `helpers/openai.py`) and the `helpers/beta.py` factory remain for one more release — each emits a `DeprecationWarning` on construction. Migrate intent/datetime helpers to `helpers/llm.py` (Guava-key path), or to the new RAG wrappers for direct Gemini/OpenAI use. The new RAG wrappers in `helpers/openai.py` and `helpers/genai.py` do not warn.
 
 ## Table of Contents
 
@@ -28,11 +28,11 @@ The `guava.helpers` module provides high-level abstractions for Retrieval-Augmen
 | `lancedb.py` | LanceDB vector store (local or GCS) |
 | `pgvector.py` | PostgreSQL pgvector vector store |
 | `pinecone.py` | Pinecone serverless vector store + Pinecone Inference embedding |
-| `vertexai.py` | Vertex AI / Gemini embedding and generation models (RAG only) |
+| `genai.py` | Google Gemini (Vertex AI or AI Studio) embedding and generation models for RAG (`GenAIEmbedding`, `GenAIGeneration`); also contains the deprecated LLM-style `IntentRecognizer` / `DateRangeParser` / `DatetimeFilter` for one more release |
+| `openai.py` | OpenAI embedding and generation models for RAG (`OpenAIEmbedding`, `OpenAIGeneration`); also contains the deprecated LLM-style `IntentRecognizer` / `IntentClarifier` / `DatetimeFilter` / file-search `DocumentQA` for one more release |
+| `beta.py` | Deprecated factory `create_openai_client()` that proxies through the Guava server; kept while the deprecated `openai.py` classes still depend on it |
+| `vertexai.py` | Backward-compatibility shim re-exporting `GenAIEmbedding`/`GenAIGeneration` under the legacy `VertexAI*` names; emits a `DeprecationWarning` on use |
 | `llm.py` | LLM-backed helper classes (`IntentRecognizer`, `DatetimeFilter`, `DateRangeParser`) — calls the Guava server `POST /v1/llm/generate` endpoint |
-| `openai.py` | **Deprecated.** Standalone BYOK OpenAI wrappers + deprecated `DocumentQA` (file_search) |
-| `genai.py` | **Deprecated.** Standalone BYOK Google Gemini wrappers |
-| `beta.py` | **Deprecated.** Legacy factory for OpenAI client via Guava proxy |
 | `fastapi.py` | FastAPI WebSocket router for Guava call controllers |
 
 ---
@@ -102,7 +102,7 @@ The central RAG orchestration system. `DocumentQA` in `rag.py` supports two oper
   +--------------+            |  +-------+-------+       +---------+---------+
           |                   |  | chunk_document |       |                   |
           v                   |  | (paragraph-    |       |  Implementations: |
-  +---------------+           |  |  boundary      |       |  VertexAI         |
+  +---------------+           |  |  boundary      |       |  GenAI            |
   | Guava Server  |           |  |  splitting)    |       |  Generation       |
   | RAG API       |           |  +----------------+       +-------------------+
   +---------------+           |
@@ -136,8 +136,9 @@ The central RAG orchestration system. `DocumentQA` in `rag.py` supports two oper
   ┌─ VectorStore.add_texts(chunks) or .upsert_texts(ids, chunks) ─────────┐
   │                                                                        │
   │  Internally calls EmbeddingModel.embed_documents(chunks)               │
-  │    → e.g. VertexAIEmbedding: gemini-embedding-001                      │
+  │    → e.g. GenAIEmbedding: gemini-embedding-001                         │
   │      task_type = RETRIEVAL_DOCUMENT (optimized for indexing)            │
+  │      (OpenAIEmbedding is task-agnostic — same call for docs and query) │
   │    → returns list[list[float]] (one vector per chunk)                   │
   │                                                                        │
   │  Stores (chunk_id, text, vector) in the chosen backend                 │
@@ -157,9 +158,9 @@ The central RAG orchestration system. `DocumentQA` in `rag.py` supports two oper
   ┌─ VectorStore.search(question, k=5) ──────────────────────────────────┐
   │                                                                       │
   │  1. EmbeddingModel.embed_query(question)                              │
-  │     → e.g. VertexAIEmbedding: gemini-embedding-001                    │
+  │     → e.g. GenAIEmbedding: gemini-embedding-001                       │
   │       task_type = QUESTION_ANSWERING (optimized for retrieval)         │
-  │     → single vector (768-dim for Vertex AI, 1024 for Pinecone, etc.)  │
+  │     → single vector (768-dim Gemini, 1536-dim OpenAI, 1024 Pinecone)  │
   │                                                                       │
   │  2. Cosine similarity search against stored chunk vectors              │
   │     → returns top-k chunk texts as list[str]                          │
@@ -193,7 +194,8 @@ The central RAG orchestration system. `DocumentQA` in `rag.py` supports two oper
   │  └─────────────────────────────────────────────────────────────┘      │
   │                                                                       │
   │  Output: free-text answer (no JSON schema)                            │
-  │  → e.g. VertexAIGeneration calls Gemini 2.5 Flash                     │
+  │  → e.g. GenAIGeneration calls Gemini 2.5 Flash,                       │
+  │         OpenAIGeneration calls gpt-5-mini                             │
   └───────────┬───────────────────────────────────────────────────────────┘
               |
               v
@@ -254,44 +256,44 @@ Four interchangeable implementations behind the `VectorStore` abstract interface
          | embed_query()     |
          +---------+---------+
                    |
-           +-------+-------+
-           |               |
-           v               v
-  +--------------+  +------------------+
-  | VertexAI     |  | Pinecone         |
-  | Embedding    |  | Inference        |
-  | (vertexai.py)|  | Embedding        |
-  +--------------+  | (pinecone.py)    |
-  | gemini-      |  +------------------+
-  | embedding-001|  | multilingual-    |
-  | 768 dims     |  | e5-large         |
-  | task-specific|  | 1024 dims        |
-  | RETRIEVAL_DOC|  | passage/query    |
-  | vs QUESTION  |  | input types      |
-  +--------------+  +------------------+
+        +----------+----------+----------------+
+        |                     |                |
+        v                     v                v
+  +--------------+  +------------------+  +--------------+
+  | GenAI        |  | OpenAI           |  | Pinecone     |
+  | Embedding    |  | Embedding        |  | Inference    |
+  | (genai.py)   |  | (openai.py)      |  | Embedding    |
+  +--------------+  +------------------+  | (pinecone.py)|
+  | gemini-      |  | text-embedding-  |  +--------------+
+  | embedding-001|  | 3-small          |  | multilingual-|
+  | 768 dims     |  | 1536 dims        |  | e5-large     |
+  | task-specific|  | task-agnostic    |  | 1024 dims    |
+  | RETRIEVAL_DOC|  | dimensions=      |  | passage/     |
+  | vs QUESTION  |  | param            |  | query input  |
+  +--------------+  +------------------+  +--------------+
 ```
 
 ### 3. Cloud Model Integrations (RAG only)
 
-Integration adapters for Google Gemini via Vertex AI, used as embedding and generation models for the local-mode RAG path.
+Integration adapters for Google Gemini and OpenAI, used as embedding and generation models for the local-mode RAG path. The caller supplies the configured client; Guava helpers never instantiate clients on your behalf.
 
 ```
-  +---------------------------+
-  |        Vertex AI          |
-  |       (vertexai.py)       |
-  +---------------------------+
-  |                           |
-  |  VertexAIEmbedding        |
-  |    embed_documents()      |
-  |    embed_query()          |
-  |                           |
-  |  VertexAIGeneration       |
-  |    generate()             |
-  +-------------+-------------+
-                |
-                v
-        google.genai.Client
-        (Vertex AI)
+  +---------------------------+        +---------------------------+
+  |    Google Gemini          |        |        OpenAI             |
+  |    (genai.py)             |        |       (openai.py)         |
+  +---------------------------+        +---------------------------+
+  |                           |        |                           |
+  |  GenAIEmbedding           |        |  OpenAIEmbedding          |
+  |    embed_documents()      |        |    embed_documents()      |
+  |    embed_query()          |        |    embed_query()          |
+  |                           |        |                           |
+  |  GenAIGeneration          |        |  OpenAIGeneration         |
+  |    generate()             |        |    generate()             |
+  +-------------+-------------+        +-------------+-------------+
+                |                                    |
+                v                                    v
+        google.genai.Client                  openai.OpenAI
+        (Vertex AI or AI Studio)             (chat.completions / embeddings)
 ```
 
 ### 4. Intent & Datetime Processing
@@ -588,16 +590,19 @@ How all subsystems connect at the highest level:
   |  +----------------------------+    +-------------------------------+      |
   |  | Embedding & Generation     |    | Server Communication          |      |
   |  +----------------------------+    +-------------------------------+      |
-  |  | vertexai.py:               |    | fastapi.py:                   |      |
-  |  |   VertexAIEmbedding        |    |   create_router()             |      |
-  |  |   VertexAIGeneration       |    |   WebSocket event/command     |      |
-  |  | pinecone.py:               |    |   processing                  |      |
-  |  |   PineconeInference        |    +-------------------------------+      |
+  |  | genai.py:                  |    | fastapi.py:                   |      |
+  |  |   GenAIEmbedding           |    |   create_router()             |      |
+  |  |   GenAIGeneration          |    |   WebSocket event/command     |      |
+  |  | openai.py:                 |    |   processing                  |      |
+  |  |   OpenAIEmbedding          |    +-------------------------------+      |
+  |  |   OpenAIGeneration         |                                           |
+  |  | pinecone.py:               |                                           |
+  |  |   PineconeInference        |                                           |
   |  |   Embedding                |                                           |
   |  +----------------------------+                                           |
   |                                                                           |
-  |  Deprecated: openai.py, genai.py, beta.py — see top of README for the     |
-  |  recommended migration paths.                                             |
+  |  vertexai.py is a backward-compatibility shim re-exporting the genai      |
+  |  classes under the legacy VertexAI* names — see the migration note above. |
   +===========================================================================+
 ```
 
@@ -775,26 +780,97 @@ Auto-creates serverless index if missing. Batch upserts in 100-vector chunks. St
 
 ---
 
-### `vertexai.py`
+### `genai.py`
 
-Vertex AI (Google Gemini) embedding and generation model implementations.
+Google Gemini embedding and generation model implementations for the local-mode RAG path. Works with either a Vertex AI client (`genai.Client(vertexai=True, ...)`) or an AI Studio client (`genai.Client(api_key=...)`).
 
-**`VertexAIEmbedding` Class** — Implements `EmbeddingModel`.
+Install with `pip install 'guava-sdk[genai]'` (or install `google-genai>=1.55.0` directly).
+
+**`GenAIEmbedding` Class** — Implements `EmbeddingModel`.
 
 | Parameter | Type | Description |
 |---|---|---|
-| `client` | `google.genai.Client` | Configured Gemini client |
+| `client` | `google.genai.Client` | Configured Gemini client (caller-supplied) |
 | `model` | `str` | Embedding model (default `"gemini-embedding-001"`) |
 | `dimensionality` | `int` | Output dimensions (default 768) |
 
 Uses task type `RETRIEVAL_DOCUMENT` for document embedding and `QUESTION_ANSWERING` for query embedding.
 
-**`VertexAIGeneration` Class** — Implements `GenerationModel`.
+**`GenAIGeneration` Class** — Implements `GenerationModel`.
 
 | Parameter | Type | Description |
 |---|---|---|
-| `client` | `google.genai.Client` | Configured Gemini client |
+| `client` | `google.genai.Client` | Configured Gemini client (caller-supplied) |
 | `model` | `str` | Generation model (default `"gemini-2.5-flash"`) |
+| `thinking_budget` | `int \| None` | Token budget for the model's internal thinking step. Default `0` disables thinking on `gemini-2.5-flash` for faster responses. Pass `None` for non-thinking models (e.g. `gemini-1.5-flash`); pass a positive integer to enable extended thinking. |
+
+#### Deprecated legacy LLM helpers (same module)
+
+For one more release, `helpers/genai.py` also exports the older Gemini-backed LLM helpers. Each emits a `DeprecationWarning` on construction. Migrate to `guava.helpers.llm` (Guava-key path); if you specifically want to drive Gemini yourself, call `google.genai` directly inside your callback.
+
+| Class | Replacement |
+|---|---|
+| `IntentRecognizer(intent_choices, client)` | `guava.helpers.llm.IntentRecognizer` |
+| `DateRangeParser(client, model=...)` | `guava.helpers.llm.DateRangeParser` |
+| `DatetimeFilter(source_list, client, model=...)` | `guava.helpers.llm.DatetimeFilter` |
+
+---
+
+### `openai.py`
+
+OpenAI embedding and generation model implementations for the local-mode RAG path. Caller supplies a configured `openai.OpenAI` client (which works equally well against Azure OpenAI or any OpenAI-compatible base URL).
+
+Install with `pip install 'guava-sdk[openai]'` (or install `openai>=2.8.1` directly).
+
+**`OpenAIEmbedding` Class** — Implements `EmbeddingModel`.
+
+| Parameter | Type | Description |
+|---|---|---|
+| `client` | `openai.OpenAI` | Configured OpenAI client (caller-supplied) |
+| `model` | `str` | Embedding model (default `"text-embedding-3-small"`) |
+| `dimensionality` | `int` | Output dimensions (default 1536). Sent as the `dimensions=` parameter for every model except `text-embedding-ada-002`, which rejects it. |
+
+Task-agnostic — `embed_documents` and `embed_query` share a single underlying call (OpenAI has no document/query task distinction).
+
+**`OpenAIGeneration` Class** — Implements `GenerationModel`.
+
+| Parameter | Type | Description |
+|---|---|---|
+| `client` | `openai.OpenAI` | Configured OpenAI client (caller-supplied) |
+| `model` | `str` | Chat model (default `"gpt-5-mini"`) |
+
+Calls `chat.completions.create`. The `system_instruction` argument maps to a `system` message prepended to the `user` prompt.
+
+#### Deprecated legacy LLM helpers (same module)
+
+For one more release, `helpers/openai.py` also exports the older OpenAI-backed LLM helpers. Each emits a `DeprecationWarning` on construction. Migrate to `guava.helpers.llm` (Guava-key path) or to `guava.helpers.rag.DocumentQA` + `OpenAIGeneration` above.
+
+| Class | Replacement |
+|---|---|
+| `IntentRecognizer(intent_choices, client=None)` | `guava.helpers.llm.IntentRecognizer` |
+| `IntentClarifier(intent_choices, client=None)` | `guava.helpers.llm.IntentRecognizer` (the new server-backed version returns ranked plausible matches) |
+| `DatetimeFilter(source_list, client=None)` | `guava.helpers.llm.DatetimeFilter` |
+| `DocumentQA(vector_store_name, document, client=None)` *(OpenAI file_search)* | `guava.helpers.rag.DocumentQA(store=..., generation_model=OpenAIGeneration(client=...))` |
+
+When `client` is omitted, the legacy classes call `beta.create_openai_client()` to build an OpenAI client that proxies through the Guava server using `GUAVA_API_KEY`. That factory is itself deprecated.
+
+---
+
+### `beta.py` *(deprecated)*
+
+`create_openai_client() -> openai.OpenAI` — returns an OpenAI client pointed at the Guava server's OpenAI proxy, using `GUAVA_API_KEY`. Emits a `DeprecationWarning` on call. Kept while the legacy classes in `openai.py` still depend on it; will be removed in the same release that removes those classes.
+
+---
+
+### `vertexai.py` *(compatibility shim)*
+
+Backward-compatibility shim that re-exports `GenAIEmbedding` / `GenAIGeneration` under their legacy `VertexAIEmbedding` / `VertexAIGeneration` names. Each legacy name emits a single `DeprecationWarning` on first access, then caches the resolved class so subsequent lookups are silent.
+
+The shim will be removed in a future release. Migrate to:
+
+```python
+from guava.helpers.genai import GenAIEmbedding, GenAIGeneration
+```
 
 ---
 
@@ -827,32 +903,6 @@ LLM-backed helper classes. Each helper builds its prompt and Pydantic JSON schem
 | Method | Description |
 |---|---|
 | `parse(query, buffer_days=1)` | Return `(start_date, end_date)` inclusive range, bounded to [today, today+365] |
-
----
-
-### `openai.py` *(deprecated)*
-
-> **Deprecated** — emits a `DeprecationWarning` on import. Use `guava.helpers.llm` for the Guava-key-only path; for raw OpenAI inside Guava callbacks see `examples/integrations/openai` in guava-starter.
-
-OpenAI helpers (`IntentRecognizer`, `IntentClarifier`, `DatetimeFilter`, `DocumentQA`). Each class accepts an optional `client: openai.OpenAI`; when omitted, falls back to `beta.create_openai_client()`, which routes through the Guava server's OpenAI proxy using `GUAVA_API_KEY`. The OpenAI model is hardcoded to `"gpt-5-mini"`. Same conceptual interface as `helpers.llm`, minus `DateRangeParser`.
-
-**`DocumentQA`** — OpenAI-specific file-search RAG. Uses OpenAI vector stores and the file_search tool. Use `guava.helpers.rag.DocumentQA` instead.
-
----
-
-### `genai.py` *(deprecated)*
-
-> **Deprecated** — emits a `DeprecationWarning` on import. Use `guava.helpers.llm` for the Guava-key-only path; for raw Gemini inside Guava callbacks see `examples/integrations/genai` in guava-starter.
-
-Standalone BYOK Google Gemini helpers (`IntentRecognizer`, `DateRangeParser`, `DatetimeFilter` — no `IntentClarifier`). Each class requires `client: genai.Client`. `DateRangeParser` and `DatetimeFilter` accept an optional `model` (default `"gemini-2.5-flash"`); `IntentRecognizer` hardcodes `"gemini-2.5-flash"`. Same conceptual interface as `helpers.llm`.
-
----
-
-### `beta.py` *(deprecated)*
-
-> **Deprecated** — emits a `DeprecationWarning` on call. Use `guava.helpers.llm` instead; for raw OpenAI integration see `examples/integrations/openai` in guava-starter.
-
-**`create_openai_client() -> openai.OpenAI`** — Returns an OpenAI client configured with `GUAVA_API_KEY` and the Guava server's OpenAI proxy endpoint.
 
 ---
 

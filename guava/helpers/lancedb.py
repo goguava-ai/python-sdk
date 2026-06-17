@@ -12,16 +12,18 @@ class LanceDBStore(VectorStore):
 
     Works with local paths (``"./data"``) or GCS URIs (``"gs://bucket/data"``).
 
-    An ``embedding_model`` is required. To use Vertex AI embeddings, construct a
-    ``VertexAIEmbedding`` with your own client and pass it here — Guava helpers
-    never create API clients on your behalf.
+    An ``embedding_model`` is required. To use Gemini embeddings, construct a
+    ``GenAIEmbedding`` with your own client and pass it here — Guava helpers
+    never create API clients on your behalf. Any ``EmbeddingModel`` works
+    (``GenAIEmbedding``, ``OpenAIEmbedding``, ``PineconeInferenceEmbedding``,
+    or a custom subclass).
 
     Example::
 
         from google import genai
-        from guava.helpers.vertexai import VertexAIEmbedding
+        from guava.helpers.genai import GenAIEmbedding
         client = genai.Client(vertexai=True, project="my-project", location="us-central1")
-        store = LanceDBStore("gs://my-bucket/lancedb", embedding_model=VertexAIEmbedding(client=client))
+        store = LanceDBStore("gs://my-bucket/lancedb", embedding_model=GenAIEmbedding(client=client))
 
     Args:
         path: Local path or GCS URI for LanceDB storage.
@@ -40,7 +42,7 @@ class LanceDBStore(VectorStore):
             import lancedb as _lancedb
         except ImportError:
             raise ImportError(
-                "lancedb is not installed. Run: pip install 'gridspace-guava[lancedb]'"
+                "lancedb is not installed. Run: pip install 'guava-sdk[lancedb]'"
             ) from None
         self._embedding_model = embedding_model
         self._table_name = table_name

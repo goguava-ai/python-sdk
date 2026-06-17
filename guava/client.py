@@ -1,6 +1,7 @@
 import logging
 import threading
 import os
+import time
 import httpx
 import platform
 import warnings
@@ -28,11 +29,11 @@ from .threading_utils import FirstEntry
 
 from guava.socket.client import GuavaSocket, GuavaSocketClosedError
 from . import listen_inbound, guavadialer_events
-from .utils import get_base_url, check_exactly_one, check_response, cli_config
-from .auth import AuthStrategy, APIKeyAuth, GuavaDeploy, GUAVA_DEPLOY_TOKEN_PATH, cli_auth
+from .utils import get_base_url, check_exactly_one, check_response
+from .auth import AuthStrategy, APIKeyAuth, GuavaDeploy, GUAVA_DEPLOY_TOKEN_PATH, cli_auth, CLIAuth
 from .telemetry import telemetry_client
 from guava.types.call_info import CallInfo, PSTNCallInfo
-from datetime import timedelta
+from datetime import timedelta, datetime, timezone
 
 if TYPE_CHECKING:
     from . import campaigns
@@ -68,11 +69,11 @@ class Client:
         elif GUAVA_DEPLOY_TOKEN_PATH.exists(): 
             self._auth = GuavaDeploy()
         elif 'GUAVA_API_KEY' in os.environ:
-            self._auth = APIKeyAuth(os.environ['GUAVA_API_KEY'])
-        elif cli_config().exists():
+            self._auth = APIKeyAuth(os.environ['GUAVA_API_KEY']) # nosemgrep: python-no-guava-api-key-env
+        elif CLIAuth.exists():
             self._auth = cli_auth.get()
         else:
-            raise Exception("Guava API key must be provided either as argument to client constructor, or in environment variable GUAVA_API_KEY.")
+            raise Exception("Unable to authenticate to Guava. You must do one of the following:\n- Sign in using the Guava CLI.\n- Or, provide an API key using the GUAVA_API_KEY environment variable.\n- Or, provide the API key as an argument to the constructor.")
         
         if first_client.claim():
             # Set SDK client for telemetry uploads.
@@ -302,8 +303,9 @@ class Client:
 
             logger.info("Call %s: controller ready.", call_id)
             gs.send(guavadialer_events.ControllerReady(call_id=call_id))
+            assert call_controller
 
-            with GuavaSocket[Command, Event](
+            with GuavaSocket[Command, Event | None](
                     f"campaign-call-{call_id}",
                     self.get_websocket_url(f"v2/connect-campaign-call/{call_id}"),
                     client=self,
@@ -313,6 +315,7 @@ class Client:
                 ) as call_gs:
 
                 def listen_for_events():
+                    assert call_controller
                     try:
                         while call_gs.is_open():
                             event = call_gs.recv()
@@ -443,3 +446,48 @@ class Client:
             headers=self._get_headers(),
         )
         check_response(response)
+
+    def next_sms(
+        self,
+        from_number: str,
+        to_number: str,
+        *,
+        timeout: float = 60.0,
+        poll_interval: float = 2.0,
+    ) -> Optional[dict]:
+        """Wait for and return the next inbound SMS from ``from_number`` to ``to_number``.
+
+        Polls the inbox for messages received after this call begins, blocking until one
+        arrives or ``timeout`` elapses.
+
+        Args:
+            from_number: The external sender's number to wait for (E.164).
+            to_number: One of your org's numbers that will receive the message (E.164).
+            timeout: Maximum seconds to wait for a message before giving up.
+            poll_interval: Seconds to wait between inbox polls.
+
+        Returns:
+            The message dict (``id``, ``from_number``, ``to_number``, ``content``,
+            ``received_at``, ``modality``, ``direction``), or ``None`` if ``timeout``
+            elapses with no new message.
+        """
+        start = datetime.now(timezone.utc).isoformat()
+        deadline = time.monotonic() + timeout
+        while True:
+            response = check_response(httpx.get(
+                self.get_http_url("v1/messages"),
+                params={
+                    "to_number": to_number,
+                    "from_number": from_number,
+                    "modality": "sms",
+                    "start": start,
+                },
+                headers=self._get_headers(),
+            ))
+            messages = response.json().get("messages", [])
+            if messages:
+                return messages[0]
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None
+            time.sleep(min(poll_interval, remaining))

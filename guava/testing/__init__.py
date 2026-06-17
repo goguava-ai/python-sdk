@@ -1,3 +1,3 @@
-from .agentpatcher import AgentPatcher
+from .mocks import MockCall
 
-__all__ = ["AgentPatcher"]
+__all__ = ["MockCall"]

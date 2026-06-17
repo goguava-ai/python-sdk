@@ -6,7 +6,7 @@ from guava import Agent
 from guava import logging_utils
 from guava.examples.example_data import FURNITURE_RETAILER_QA
 from guava.helpers.rag import DocumentQA
-from guava.examples import example_data
+from guava.examples import get_agent_number
 from guava.helpers.llm import IntentRecognizer
 
 logger = logging.getLogger("help_desk")
@@ -85,15 +85,20 @@ if __name__ == "__main__":
         "--webrtc", metavar="WEBRTC_CODE", nargs="?", const="", help="Listen on a WebRTC code."
     )
     group.add_argument("--local", action="store_true", help="Start a local call.")
+    group.add_argument(
+        "--chat", action="store_true", help="Start a local chat session (for testing)."
+    )
     group.add_argument("--sip", metavar="SIP_CODE", help="Listen on a SIP code 'guavasip-...'.")
     args = parser.parse_args()
 
     # Every Agent can be attached to one of many different channels.
     if args.phone is not None:
-        agent.listen_phone(args.phone or example_data.get_phone_number())
+        agent.listen_phone(args.phone or get_agent_number())
     elif args.webrtc is not None:
         agent.listen_webrtc(args.webrtc or None)
     elif args.sip:
         agent.listen_sip(args.sip)
+    elif args.chat:
+        agent.chat()
     else:
         agent.call_local()

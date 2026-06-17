@@ -117,6 +117,24 @@ class SetVariableCommand(BaseModel):
     key: str
     value: JsonValue
 
+class SendCallerTextCommand(BaseModel):
+    command_type: Literal["send-caller-text"] = "send-caller-text"
+    text: str
+
+class ExpertErrorCommand(BaseModel):
+    """
+    Use this message to inform the Agent when the expert has errored
+    while processing a callback.
+    """
+
+    command_type: Literal["expert-error"] = 'expert-error'
+    message: str
+
+class SetAgentDTMFCommand(BaseModel):
+    """Enable or disable the agent's ability to press DTMF digits."""
+    command_type: Literal["set-agent-dtmf"] = 'set-agent-dtmf'
+    enabled: bool
+
 Command = Annotated[
     Union[
         StartOutboundCallCommand,
@@ -136,6 +154,9 @@ Command = Annotated[
         SetLanguageMode,
         RetryTaskCommand,
         SetVariableCommand,
+        SendCallerTextCommand,
+        ExpertErrorCommand,
+        SetAgentDTMFCommand,
     ],
     Field(discriminator="command_type"),
 ]
