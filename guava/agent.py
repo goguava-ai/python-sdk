@@ -392,7 +392,7 @@ class Agent:
             case ActionItemCompletedEvent():
                 call._field_values[event.key] = event.payload
                 if event.key and event.payload:
-                    logger.info("Field %s updated with value: %r", event.key, event.payload)
+                    logger.info("Field %s updated.", event.key)
             case ExecuteActionEvent():
                 logger.info("Executing action '%s'", event.action_key)
 
@@ -666,11 +666,9 @@ class Agent:
                 ) as gs:
 
                 active_call_threads: list[threading.Thread] = []
-                shutting_down = threading.Event()
 
-
-                while gs.is_open():
-                    try:
+                try:
+                    while gs.is_open():
                         server_message = gs.recv()
                         match server_message:
                             case guavadialer_events.ListenStarted():
@@ -686,32 +684,13 @@ class Agent:
                                 )
                                 active_call_threads.append(t)
                                 t.start()
-                    except KeyboardInterrupt:
-                        alive = [t for t in active_call_threads if t.is_alive()]
-                        if alive and not shutting_down.is_set():
-                            shutting_down.set()
-                            logger.info(
-                                "Caught Ctrl+C — %d call(s) still in progress. "
-                                "Disabling campaign so no new contacts are dispatched. "
-                                "Waiting for active calls to finish... (Ctrl+C again to force quit)",
-                                len(alive),
-                            )
-                            try:
-                                r = httpx.patch(
-                                    self._client.get_http_url(f"v1/campaigns/{campaign.id}"),
-                                    json={"enabled": False},
-                                    headers=self._client._get_headers(),
-                                )
-                                check_response(r)
-                            except Exception:
-                                logger.warning("Failed to disable campaign via API.", exc_info=True)
-                            for t in alive:
-                                t.join()
-                            logger.info("All active calls finished. Shutting down.")
-                            return
-                        else:
-                            logger.info("Force quitting campaign '%s'.", campaign.name)
-                            return
+                except KeyboardInterrupt:
+                    alive = [t for t in active_call_threads if t.is_alive()]
+                    if alive:
+                        logger.info("Received Ctrl-C. Detaching from campaign - waiting for %d active calls to finish (Ctrl-C again to force exit).", len(alive))
+                        for t in alive:
+                            t.join()
+                        logger.info("All active calls finished. Shutting down.")
         except GuavaSocketClosedError:
             logger.info("Campaign '%s' disconnected.", campaign.name)
 
