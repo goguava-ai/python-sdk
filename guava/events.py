@@ -113,6 +113,7 @@ class OutboundCallFailed(BaseEvent):
 class BotSessionEnded(BaseEvent):
     event_type: Literal["bot-session-ended"] = "bot-session-ended"
     termination_reason: TerminationReason
+    dnc: bool = False
 
 class ChoiceQueryEvent(BaseEvent):
     event_type: Literal["choice-query"] = "choice-query"

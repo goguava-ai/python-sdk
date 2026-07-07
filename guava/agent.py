@@ -702,6 +702,16 @@ class Agent:
 
     @preview("Agent Testing")
     def test_roleplay(self, roleplay_prompt: str, variables=None) -> "TestSession":
+        """Deprecated: use agent.roleplay() instead."""
+        warnings.warn(
+            "test_roleplay() is deprecated; use roleplay() instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.roleplay(roleplay_prompt, variables)
+
+    @preview("Agent Testing")
+    def roleplay(self, roleplay_prompt: str, variables=None) -> "TestSession":
         """Run an automated test conversation where an LLM plays the caller.
 
         Args:
