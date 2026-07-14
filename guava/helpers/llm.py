@@ -11,6 +11,18 @@ from guava.utils import check_response
 from guava import Client
 
 
+def generate(prompt: str, *, json_schema: dict | None = None) -> str:
+    """Public wrapper around the Guava LLM endpoint.
+
+    Prefer this over the underscore-prefixed :func:`_generate` when calling
+    from outside :mod:`guava.helpers.llm` — it keeps the implementation
+    private to the package while giving external callers a stable entry point.
+
+    See :func:`_generate` for parameter and return-value details.
+    """
+    return _generate(prompt, json_schema=json_schema)
+
+
 def _generate(prompt: str, *, json_schema: dict | None = None) -> str:
     """Call the Guava server LLM endpoint and return the raw response text.
 

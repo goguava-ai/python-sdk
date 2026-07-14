@@ -17,7 +17,7 @@ agent = Agent(
     name="Leo",
     organization="Thai Palace",
     purpose="Helping callers join the restaurant waitlist",
-    voice="jack",
+    voice="grace",
 )
 
 
