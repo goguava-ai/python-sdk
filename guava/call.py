@@ -14,11 +14,12 @@ from .commands import (
     SetLanguageMode,
     ReadScriptCommand,
     SetAgentDTMFCommand,
+    SendAgentDTMFCommand,
 )
 from . import types
-from .types import Field, Say
+from .types import Field, Say, DTMFDigit
 
-from typing import Optional, Union, Any
+from typing import Optional, Union, Any, cast, get_args
 from guava.types import Language
 from guava.telemetry import telemetry_client
 from guava.call_controller import CommandQueueEnd
@@ -68,6 +69,7 @@ class Call:
         self._command_queue: queue.Queue[Command | CommandQueueEnd] = queue.Queue()
         self._field_values: dict[str, Any] = {}
         self._variables: dict[str, Any] = {}
+        self._field_keys_by_task_id: dict[str, list[str]] = {}
 
     @property
     def id(self) -> str:
@@ -105,7 +107,24 @@ class Call:
         )
 
     def set_agent_dtmf(self, enabled: bool):
+        if self.call_info.call_type == 'webrtc':
+            raise RuntimeError("WebRTC calls do not support sending DTMF.")
         self.send_command(SetAgentDTMFCommand(enabled=enabled))
+
+    def send_dtmf(
+            self, 
+            digits: list[DTMFDigit] | str 
+    ):  
+        if self.call_info.call_type == 'webrtc':
+            raise RuntimeError("WebRTC calls do not support sending DTMF.")
+        
+        digits_list = list(digits) if isinstance(digits, str) else digits
+
+        if not set(digits).issubset(set(get_args(DTMFDigit))):
+            raise ValueError(f'Please input a valid set of DTMF digits. The valid DTMF digits are: {get_args(DTMFDigit)}.')
+
+        self.send_command(SendAgentDTMFCommand(digits=cast(list[DTMFDigit], digits_list)))
+        
 
     def set_persona(
             self,
@@ -177,9 +196,10 @@ class Call:
         completion_criteria: Optional[str] = "",
     ):
         assert objective or checklist, "At least one of args ['objective','checklist'] must be provided."
-
+        
+        field_keys = []
         checklist = checklist or []
-
+        
         action_items : list[Union[types.Todo, types.SerializableField, Say]] = []
         for item in checklist:
             if isinstance(item, str):
@@ -196,11 +216,13 @@ class Call:
                     field_type=item.field_type,
                     required=item.required,
                     choices=item.choices,
-                    is_search_field=item.searchable
+                    is_search_field=item.searchable,
+                    sensitive=item.sensitive,
                 ))
+                field_keys.append(item.key)
             else:
                 action_items.append(item)
-
+        self._field_keys_by_task_id[task_id] = field_keys
         self.send_command(
             SetTaskCommand(
                 task_id=task_id,

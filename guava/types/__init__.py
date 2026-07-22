@@ -24,7 +24,7 @@ OutreachModality = Literal["sms"]
 
 Language = Literal["english", "spanish", "french", "german", "italian"]
 
-FieldTypes = Literal["text", "date", "datetime", "integer", "multiple_choice", "calendar_slot"]
+FieldTypes = Literal["text", "date", "integer", "multiple_choice", "calendar_slot", "digit_sequence", "cvv"]
 ChoiceGeneratorFunction = Callable[[str], tuple[list[str], list[str]]]
 
 class Field(BaseModel):
@@ -59,6 +59,8 @@ class Field(BaseModel):
     # Preview feature. Don't document yet.
     searchable: bool = False
 
+    sensitive: bool = False
+
     @model_validator(mode="after")
     def validate_choices(self):
         if self.field_type == 'datetime':
@@ -88,6 +90,7 @@ class SerializableField(BaseModel):
     # multiple choice
     choices: list[str] = PydanticField(default_factory=list)
     is_search_field: bool = False
+    sensitive: bool = False
 
 
 class ReachPersonOutcome(BaseModel):

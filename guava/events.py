@@ -20,9 +20,6 @@ class InboundCallEvent(BaseEvent):
     caller_number: Optional[E164PhoneNumber] = None
     agent_number: Optional[E164PhoneNumber] = None
 
-class SocketHealthEvent(BaseEvent):
-    event_type: Literal["socket-health"] = "socket-health"
-
 
 class CallerSpeechEvent(BaseEvent):
     """
@@ -128,6 +125,7 @@ class EscalateEvent(BaseEvent):
 class DTMFPressedEvent(BaseEvent):
     event_type: Literal['dtmf'] = 'dtmf'
     digit: DTMFDigit
+    recent_digits: str = ''
 
 Event = Annotated[
     Union[
@@ -147,7 +145,6 @@ Event = Annotated[
         OutboundCallFailed,
         BotSessionEnded,
         ChoiceQueryEvent,
-        SocketHealthEvent,
         EscalateEvent,
         DTMFPressedEvent,
     ],

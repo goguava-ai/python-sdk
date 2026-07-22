@@ -5,10 +5,11 @@ from datetime import timedelta
 import inspect
 import logging
 import threading
+import time
 import warnings
 import httpx
 
-from typing import TYPE_CHECKING, Callable, Iterator, overload, Optional, Any, ParamSpec, cast
+from typing import TYPE_CHECKING, Callable, Iterator, overload, Optional, Any, ParamSpec, cast, Literal
 from websockets.sync.client import connect as ws_connect
 
 if TYPE_CHECKING:
@@ -58,9 +59,25 @@ from .commands import (
     ExpertErrorCommand
 )
 from guava.call_controller import CommandQueueEnd
+from guava.edge_wake import run_wakeword_loop, run_wake_loop, run_button_loop
 from .utils import preview
+from .health import HealthContext, get_health_server
 
 logger = logging.getLogger("guava.agent")
+
+
+def edge_only(fn):
+    import os
+    from functools import wraps
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        if not os.environ.get("GUAVA_EDGE"):
+            raise RuntimeError(
+                f"{fn.__name__}() feature is only available when running with --edge "
+                f"(e.g. `guava run --edge`). This feature is currently unavailable for public use " # TODO: remove
+            )
+        return fn(*args, **kwargs)
+    return wrapper
 
 
 def _accepts_positional_arg(fn: Callable, position: int) -> bool:
@@ -101,11 +118,12 @@ class SuggestedAction(BaseModel):
 
 @telemetry_client.track_class()
 class Agent:
-    def __init__(self, name: Optional[str] = None, organization: Optional[str] = None, purpose: Optional[str] = None, voice: Optional[str] = None):
+    def __init__(self, name: Optional[str] = None, organization: Optional[str] = None, purpose: Optional[str] = None, voice: Optional[str] = None, accept_dtmf=True):
         self._name: Optional[str] = name
         self._organization: Optional[str] = organization
         self._purpose: Optional[str] = purpose
         self._voice: Optional[str] = voice
+        self._accept_dtmf_for_numbers = accept_dtmf
 
         self._client = Client()
 
@@ -117,6 +135,8 @@ class Agent:
 
         self._on_task_complete_generic: Optional[Callable[[Call, str], None]] = None
         self._on_task_complete_handlers: dict[str, Callable[[Call], None]] = {}
+
+        self._on_validate_handlers: dict[str, Callable[[Call, Any],  Literal[True] | tuple[Literal[False], str]]] = {}
 
         self._on_question: Optional[Callable[[Call, str], str]] = None
         self._search_query_handlers: dict[str, Callable[[Call, str], tuple]] = {}
@@ -131,6 +151,14 @@ class Agent:
 
         self._on_escalate: Optional[Callable[[Call], None]] = None
         self._on_dtmf: Optional[Callable[[Call, DTMFPressedEvent], None]] = None
+
+        self._edge_callbacks: dict[str, Callable[[Call], None]] = {}  # "press_enter" | "wakeword" | "wake"
+        self._edge_wake_trigger: Optional[Callable[[], None]] = None
+        self._wakeword_interpreter: Any = None
+        self._edge_trigger: Optional[str] = None
+        self._edge_trigger_lock = threading.Lock()
+        self._edge_idle = threading.Event()
+        self._edge_idle.set()
 
     @overload
     def on_call_received(self, fn: Callable[[CallInfo], IncomingCallAction], /) -> Callable[[CallInfo], IncomingCallAction]: ...
@@ -273,6 +301,12 @@ class Agent:
                 self._on_task_complete_handlers[task_name] = fn
                 return fn
             return decorator
+        
+    def on_validate(self, field_key: str):
+        def decorator(fn):
+            self._on_validate_handlers[field_key] = fn
+            return fn
+        return decorator
 
     @overload
     def on_action(self, fn: Callable[[Call, str], None], /) -> Callable[[Call, str], None]: ...
@@ -323,6 +357,45 @@ class Agent:
     def on_dtmf(self, fn=None):
         return self._register("_on_dtmf", fn)
 
+    @edge_only
+    def on_press_enter(self, fn=None):
+        def register(fn):
+            self._edge_callbacks["press_enter"] = fn
+            return fn
+        if fn is not None and callable(fn):
+            return register(fn)
+        return register
+
+    @edge_only
+    def on_wakeword(self, fn=None, *, model: Optional[str] = None):
+        from pathlib import Path
+        from nanowakeword import NanoInterpreter  # type: ignore[import-not-found]
+
+        model_dir = Path(__file__).parent / "models" / "heyguava"
+        model_path = model or str(model_dir / "heyguava.onnx")
+
+        self._wakeword_interpreter = NanoInterpreter.load_model(
+            model_path,
+            cascade=True,
+            gate_threshold=0.3,
+            vad_threshold=0.5,
+        )
+
+        def register(fn):
+            self._edge_callbacks["wakeword"] = fn
+            return fn
+        if fn is not None and callable(fn):
+            return register(fn)
+        return register
+
+    @edge_only
+    def on_wake(self, *, trigger: Callable[[], None]):
+        def decorator(fn: Callable[[Call], None]):
+            self._edge_callbacks["wake"] = fn
+            self._edge_wake_trigger = trigger
+            return fn
+        return decorator
+
     _P = ParamSpec("_P")
 
     def _invoke_handler(self, call: Call, name: str, inform_agent: bool, handler: Callable[_P, None], *args: _P.args, **kwargs: _P.kwargs) -> None:
@@ -344,19 +417,30 @@ class Agent:
                 if self._on_agent_speech:
                     self._invoke_handler(call, "on_agent_speech", False, self._on_agent_speech, call, event)
             case TaskCompletedEvent():
-                logger.info("Task %s completed.", event.task_id)
-                
-                try:
-                    if self._on_task_complete_generic is not None:
-                        self._on_task_complete_generic(call, event.task_id)
-                    elif event.task_id in self._on_task_complete_handlers:
-                        self._on_task_complete_handlers[event.task_id](call)
-                    else:
-                        logger.warning("No handler registered for completion of task '%s'", event.task_id)
-                except Exception:
-                    # Log an error for the developer, but send a message back so the Agent knows the Expert encountered an error.
-                    logger.exception("An error occurred in the on_task_complete('%s') handler.", event.task_id)
-                    call.send_command(ExpertErrorCommand(message=f"The expert encountered an error while processing on_task_complete('{event.task_id}') - the task has failed."))
+                # Validate any fields that had validators attached
+                errors = []
+                for field_key in call._field_keys_by_task_id.get(event.task_id, []):
+                    if field_key in self._on_validate_handlers:
+                        result = self._on_validate_handlers[field_key](call, call.get_field(field_key))
+                        if result is not True:
+                            _, error = result
+                            errors.append(error)
+
+                if errors:
+                    call.retry_task(reason=" ".join(errors))
+                else:
+                    logger.info("Task %s completed.", event.task_id)
+                    try:
+                        if self._on_task_complete_generic is not None:
+                            self._on_task_complete_generic(call, event.task_id)
+                        elif event.task_id in self._on_task_complete_handlers:
+                            self._on_task_complete_handlers[event.task_id](call)
+                        else:
+                            logger.warning("No handler registered for completion of task '%s'", event.task_id)
+                    except Exception:
+                        # Log an error for the developer, but send a message back so the Agent knows the Expert encountered an error.
+                        logger.exception("An error occurred in the on_task_complete('%s') handler.", event.task_id)
+                        call.send_command(ExpertErrorCommand(message=f"The expert encountered an error while processing on_task_complete('{event.task_id}') - the task has failed."))
             case AgentQuestionEvent():
                 logger.info("Received a question from agent: %s", event.question)
                 if self._on_question is not None:
@@ -478,7 +562,7 @@ class Agent:
                 elif event.requested_by == 'agent':
                     call.send_instruction("No escalation target set. Apologize for not being able to help, ask them to try calling another time, and hang up the call immediately.")
                 elif event.requested_by == 'human':
-                    call.send_instruction("Let them know there are no respresentatives available to take their call. Ask them if they would prefer to continue or to call another time.")
+                    call.send_instruction("Let them know there are no respresentatives available to take their call. Ask them if they would prefer to continue or to call another time.")                
             case _:
                 logger.warning("Received unexpected event: %r", event)
 
@@ -496,19 +580,29 @@ class Agent:
                 has_on_intent=False,
                 has_on_action_requested=self._on_action_requested is not None,
                 has_on_escalate=self._on_escalate is not None,
+                accept_dtmf_for_numbers=self._accept_dtmf_for_numbers
             )
         )
 
         for key, value in initial_variables.items():
             call.set_variable(key, value)
 
-        if self._on_call_start is not None:
+        trigger = self._edge_trigger
+        self._edge_trigger = None
+
+        edge_cb = self._edge_callbacks.get(trigger) if trigger else None
+        if edge_cb is not None:
+            edge_cb(call)
+        elif self._on_call_start is not None:
             self._on_call_start(call)
 
         return call
 
     def _attach_to_call(self, call_id: str, call_info: CallInfo, initial_variables: dict = {}, route="v2/connect-call", test_session: Optional[TestSession] = None):
         """Attach a call controller to a given call ID."""
+        is_edge = self._edge_trigger is not None
+        if is_edge:
+            self._edge_idle.clear()
         try:
             command_thread = None
 
@@ -551,28 +645,88 @@ class Agent:
             call._shutdown_queue()
             if command_thread:
                 command_thread.join()
+            if is_edge:
+                self._edge_idle.set()
     
     def listen_phone(self, agent_number: str) -> None:
-        self._listen_inbound(agent_number=agent_number)
+        health_ctx = HealthContext()
+        with get_health_server(health_ctx):
+            self._listen_inbound(health_ctx, agent_number=agent_number)
 
     def listen_webrtc(self, webrtc_code: str | None = None) -> None:
         if not webrtc_code:
             logger.info("No WebRTC code provided. Creating a temporary one.")
             webrtc_code = self._client.create_webrtc_agent(ttl=timedelta(hours=1))
-        self._listen_inbound(webrtc_code=webrtc_code)
+
+        health_ctx = HealthContext()
+        with get_health_server(health_ctx):
+            self._listen_inbound(health_ctx, webrtc_code=webrtc_code)
 
     def listen_sip(self, sip_code: str) -> None:
-        self._listen_inbound(sip_code=sip_code)
+        health_ctx = HealthContext()
+        with get_health_server(health_ctx):
+            self._listen_inbound(health_ctx, sip_code=sip_code)
 
     def call_local(self, variables: dict[str, Any] = {}) -> None:
         webrtc_code = self._client.create_webrtc_agent(ttl=timedelta(minutes=5))
         threading.Thread(target=self._listen_inbound, kwargs={
+            "health_ctx": HealthContext(), # No health-server for call_local.
             "webrtc_code": webrtc_code,
             "initial_variables": variables,
         }, daemon=True).start()
         run_webrtc_helper(webrtc_code, self._client._base_url)
 
-    def _listen_inbound(self, agent_number: str | None = None, webrtc_code: str | None = None, sip_code: str | None = None, initial_variables: dict[str, Any] = {}):
+    @edge_only
+    def listen_for_wake(self, variables: dict[str, Any] = {}) -> None:
+        """Persistent local mode. Starts the inbound listener, then loops
+        waiting for button-press (Enter key) or wakeword triggers to start
+        successive calls.
+
+        Wakeword detection runs in-process via nanowakeword. Button press
+        is handled via stdin. Both can be active simultaneously.
+
+        The on_press_enter/on_wakeword/on_wake callbacks receive a Call object
+        (like on_call_start) once the triggered call connects."""
+
+        has_button = "press_enter" in self._edge_callbacks
+        has_wakeword = "wakeword" in self._edge_callbacks
+        has_wake = self._edge_wake_trigger is not None
+
+        if not has_button and not has_wakeword and not has_wake:
+            logger.warning("listen_for_wake() called but no trigger is registered (on_press_enter, on_wakeword, or on_wake).")
+            return
+
+        def _listen_inbound_safe():
+            while True:
+                try:
+                    webrtc_code = self._client.create_webrtc_agent(ttl=timedelta(hours=24))
+                    logger.info("Listener connected (code=%s…)", webrtc_code[:8])
+                    self._listen_inbound(HealthContext(), webrtc_code=webrtc_code, initial_variables=variables)
+                    logger.info("Listener disconnected, renewing code…")
+                except Exception:
+                    logger.exception("Listener crashed, reconnecting in 5 s…")
+                    time.sleep(5)
+
+        threading.Thread(target=_listen_inbound_safe, daemon=True).start()
+
+        trigger_url = self._client.get_http_url("api/trigger-local-call")
+
+        if has_wakeword:
+            threading.Thread(target=run_wakeword_loop, args=(self, trigger_url), daemon=True).start()
+            logger.info("Wakeword detection active (nanowakeword).")
+
+        if has_wake:
+            assert self._edge_wake_trigger is not None
+            threading.Thread(target=run_wake_loop, args=(self, trigger_url, self._edge_wake_trigger), daemon=True).start()
+            logger.info("Custom wake trigger active.")
+
+        if has_button:
+            run_button_loop(self, trigger_url, has_wakeword=has_wakeword)
+        else:
+            logger.info("Listening locally (no Enter key trigger).")
+            threading.Event().wait()
+
+    def _listen_inbound(self, health_ctx: HealthContext, agent_number: str | None = None, webrtc_code: str | None = None, sip_code: str | None = None, initial_variables: dict[str, Any] = {}):
         if not check_exactly_one(agent_number, webrtc_code, sip_code):
             raise TypeError("One of agent_number, webrtc_code, or sip_code must be provided.")
         
@@ -585,44 +739,49 @@ class Agent:
         elif sip_code:
             query["sip_code"] = sip_code
         query_string = urlencode(query)
-        with GuavaSocket[listen_inbound.ClientMessage, listen_inbound.ServerMessage](
-                "listen-inbound",
-                self._client.get_websocket_url(f"v2/listen-inbound?{query_string}"),
-                client=self._client,
-                serializer=lambda msg: msg.model_dump(),
-                deserializer=listen_inbound.decode_server_message,
-            ) as gs:
-            
-            # Start listening and get the response.
-            while gs.is_open():
-                server_message = gs.recv()
-                match server_message:
-                    case listen_inbound.ListenStarted():
-                        if agent_number:
-                            logger.info("Started listing on phone number %s. %d other listeners registered.", agent_number, server_message.other_listeners)
-                        elif webrtc_code:
-                            logger.info("Started listing on WebRTC code %s. %d other listeners registered.", webrtc_code, server_message.other_listeners)
-                            logger.info("WebRTC URL: %s?webrtc_code=%s", self._client.get_http_url('debug-webrtc'), webrtc_code)
-                        elif sip_code:
-                            logger.info("Started listening on SIP code %s. %d other listeners registered.", sip_code, server_message.other_listeners)
-                    case listen_inbound.IncomingCall():
-                        gs.send(listen_inbound.ClaimCall(call_id=server_message.call_id))
-                    case listen_inbound.AssignCall():
-                        logger.info("Received call (session ID: %s), info: %r", server_message.call_id, server_message.call_info)
-                        try:
-                            call_action = self._on_call_received(server_message.call_info)
-                            if isinstance(call_action, DeclineCall):
-                                logger.info("Declining call...")
-                                gs.send(listen_inbound.DeclineCall(call_id=server_message.call_id))
-                            elif isinstance(call_action, AcceptCall):
-                                logger.info("Accepting call...")
-                                gs.send(listen_inbound.AnswerCall(call_id=server_message.call_id))
 
-                                threading.Thread(target=self._attach_to_call, args=(server_message.call_id, server_message.call_info, initial_variables), daemon=True).start()
-                            else:
-                                logger.error("Unknown action for incoming call: %r", call_action)
-                        except Exception:
-                            logger.exception("Failed to initialize call controller.")
+        try:
+            with GuavaSocket[listen_inbound.ClientMessage, listen_inbound.ServerMessage](
+                    "listen-inbound",
+                    self._client.get_websocket_url(f"v2/listen-inbound?{query_string}"),
+                    client=self._client,
+                    serializer=lambda msg: msg.model_dump(),
+                    deserializer=listen_inbound.decode_server_message,
+                ) as gs:
+                
+                # Start listening and get the response.
+                while gs.is_open():
+                    server_message = gs.recv()
+                    match server_message:
+                        case listen_inbound.ListenStarted():
+                            health_ctx.ready()
+                            if agent_number:
+                                logger.info("Started listing on phone number %s. %d other listeners registered.", agent_number, server_message.other_listeners)
+                            elif webrtc_code:
+                                logger.info("Started listing on WebRTC code %s. %d other listeners registered.", webrtc_code, server_message.other_listeners)
+                                logger.info("WebRTC URL: %s?webrtc_code=%s", self._client.get_http_url('debug-webrtc'), webrtc_code)
+                            elif sip_code:
+                                logger.info("Started listening on SIP code %s. %d other listeners registered.", sip_code, server_message.other_listeners)
+                        case listen_inbound.IncomingCall():
+                            gs.send(listen_inbound.ClaimCall(call_id=server_message.call_id))
+                        case listen_inbound.AssignCall():
+                            logger.info("Received call (session ID: %s), info: %r", server_message.call_id, server_message.call_info)
+                            try:
+                                call_action = self._on_call_received(server_message.call_info)
+                                if isinstance(call_action, DeclineCall):
+                                    logger.info("Declining call...")
+                                    gs.send(listen_inbound.DeclineCall(call_id=server_message.call_id))
+                                elif isinstance(call_action, AcceptCall):
+                                    logger.info("Accepting call...")
+                                    gs.send(listen_inbound.AnswerCall(call_id=server_message.call_id))
+
+                                    threading.Thread(target=self._attach_to_call, args=(server_message.call_id, server_message.call_info, initial_variables), daemon=True).start()
+                                else:
+                                    logger.error("Unknown action for incoming call: %r", call_action)
+                            except Exception:
+                                logger.exception("Failed to initialize call controller.")
+        finally:
+            health_ctx.stopped()
 
     def call_phone(self, from_number, to_number, variables: dict[str, Any] = {}) -> None:
         for key, val in variables.items():
@@ -643,6 +802,7 @@ class Agent:
 
     def _serve_campaign(
         self,
+        health_ctx: HealthContext,
         campaign_code: str,
     ):
         campaign = campaigns.get_campaign_by_code(campaign_code)
@@ -673,6 +833,7 @@ class Agent:
                         match server_message:
                             case guavadialer_events.ListenStarted():
                                 logger.info("Listening for calls on campaign '%s'. Ready.", campaign.name)
+                                health_ctx.ready()
                             case guavadialer_events.InitiateAndAssignCall():
                                 # Only used in controller mode. In headless mode the server handles calls directly.
                                 log_phone = server_message.contact_data.get('phone_number') if server_message.contact_data else '?'
@@ -693,12 +854,16 @@ class Agent:
                         logger.info("All active calls finished. Shutting down.")
         except GuavaSocketClosedError:
             logger.info("Campaign '%s' disconnected.", campaign.name)
+        finally:
+            health_ctx.stopped()
 
     def attach_campaign(
         self,
         campaign_code: str
     ) -> None:
-        self._serve_campaign(campaign_code)
+        health_ctx = HealthContext()
+        with get_health_server(health_ctx):
+            self._serve_campaign(health_ctx, campaign_code)
 
     @preview("Agent Testing")
     def test_roleplay(self, roleplay_prompt: str, variables=None) -> "TestSession":
@@ -727,7 +892,6 @@ class Agent:
         from guava.helpers.llm import _generate
         from guava.testing.protocol import BotTTS
         from pydantic import BaseModel
-        from typing import Literal
 
         class _RoleplayAction(BaseModel):
             action: Literal["speak", "hangup"]
@@ -953,7 +1117,9 @@ Choose "speak" and provide your next utterance, or choose "hangup" if the conver
         cloned._on_task_complete_handlers = self._on_task_complete_handlers.copy()
         cloned._on_action_handlers = self._on_action_handlers.copy()
         cloned._search_query_handlers = self._search_query_handlers.copy()
-        
+        cloned._on_validate_handlers = self._on_validate_handlers.copy()
+        cloned._edge_callbacks = self._edge_callbacks.copy()
+
         return cloned
 
     @preview("Agent Testing")

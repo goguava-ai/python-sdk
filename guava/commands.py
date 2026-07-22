@@ -1,18 +1,12 @@
 from typing import Optional, Literal, Union, Annotated
 from pydantic import BaseModel, Field, model_validator, JsonValue
-from .types import E164PhoneNumber, ActionItem, Language
+from .types import E164PhoneNumber, ActionItem, Language, DTMFDigit
 
 class StartOutboundCallCommand(BaseModel):
     command_type: Literal["start-outbound"] = "start-outbound"
 
     from_number: Optional[E164PhoneNumber]
     to_number: E164PhoneNumber
-
-class ReconnectOutboundSessionCommand(BaseModel):
-    command_type: Literal["reconnect-outbound"] = "reconnect-outbound"
-    session_id: str
-    highest_seen_sequence: int
-
 
 class ListenInboundCommand(BaseModel):
     command_type: Literal["listen-inbound"] = "listen-inbound"
@@ -90,6 +84,7 @@ class RegisteredHooksCommand(BaseModel):
     has_on_intent: bool
     has_on_action_requested: bool = False
     has_on_escalate: bool = False
+    accept_dtmf_for_numbers: bool = True
 
 class SendInstructionCommand(BaseModel):
     command_type: Literal["send-instruction"] = "send-instruction"
@@ -135,10 +130,16 @@ class SetAgentDTMFCommand(BaseModel):
     command_type: Literal["set-agent-dtmf"] = 'set-agent-dtmf'
     enabled: bool
 
+class SendAgentDTMFCommand(BaseModel):
+    """
+    Command to press DTMF digits non-agentically
+    """
+    command_type: Literal["send-agent-dtmf"] = 'send-agent-dtmf'
+    digits: list[DTMFDigit]
+
 Command = Annotated[
     Union[
         StartOutboundCallCommand,
-        ReconnectOutboundSessionCommand,
         RegisteredHooksCommand,
         AnswerQuestionCommand,
         ActionSuggestionCommand,
@@ -157,6 +158,7 @@ Command = Annotated[
         SendCallerTextCommand,
         ExpertErrorCommand,
         SetAgentDTMFCommand,
+        SendAgentDTMFCommand, 
     ],
     Field(discriminator="command_type"),
 ]
