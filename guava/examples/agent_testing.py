@@ -30,7 +30,7 @@ class TestHelpDeskAgent(unittest.TestCase):
 
     def test_roleplay(self):
         # Run a roleplay conversation with an LLM acting as the caller.
-        session = help_desk_agent.test_roleplay("You are a caller trying to buy a new table.")
+        session = help_desk_agent.roleplay("You are a caller trying to buy a new table.")
         self.assertIn("sales", session.executed_actions)
         self.assertEqual("bot-transfer", session.termination_reason)
 
@@ -45,7 +45,7 @@ class TestHelpDeskAgent(unittest.TestCase):
                 "Tell then caller that the sales department is closed and that they should call back tomorrow from 9am to 5pm."
             )
 
-        session = patched.test_roleplay("You are a caller trying to buy a new table.")
+        session = patched.roleplay("You are a caller trying to buy a new table.")
 
         session.evaluate(
             # These criteria must all pass, otherwise the 'evaluate' call fails.

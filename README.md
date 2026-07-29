@@ -9,22 +9,31 @@ Full documentation for the Python SDK can be found at [https://goguava.ai/docs](
 
 ## Installation
 
-Install the SDK using your preferred package manager.
+Install the SDK using your preferred package manager. We recommend using [`uv`](https://docs.astral.sh/uv/).
 
 ```bash
-$ pip install guava-sdk
 $ uv add guava-sdk
+$ pip install guava-sdk
 $ poetry add guava-sdk
 ```
 
-## Running an Example
+We also recommend using a typechecker, [`ty`](https://docs.astral.sh/ty/) in particular, though [`mypy`](https://mypy-lang.org/) and others are also supported.
 
-Set your environment variables.
+## Authentication
 
-```bash
-$ export GUAVA_API_KEY="..."
-$ export GUAVA_AGENT_NUMBER="..."
+Log in using the [Guava CLI](https://goguava.ai/docs/quickstart):
+
+```shell
+guava login
 ```
+
+Alternatively, provide an API key through an environment variable.
+
+```shell
+$ export GUAVA_API_KEY="..." # Your API key for authentication.
+```
+
+## Running an Example
 
 Examples can be run directly using the `guava.examples` submodule.
 

@@ -1,6 +1,6 @@
 [project]
 name = "guava-sdk"
-version = "0.35.0"
+version = "0.36.0"
 description = "The official Python SDK for building Guava voice agents."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -51,6 +51,14 @@ only-include = ["guava", "pyproject.toml", "README.md"]
 
 [tool.ty.analysis]
 replace-imports-with-any = ["nanowakeword.**"]
+
+# internal/ contains legacy examples that still use the deprecated CallController
+# API; suppress deprecation warnings there.
+[[tool.ty.overrides]]
+include = ["internal/**"]
+
+[tool.ty.overrides.rules]
+deprecated = "ignore"
 
 [tool.ruff]
 line-length = 100

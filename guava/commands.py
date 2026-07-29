@@ -1,6 +1,7 @@
 from typing import Optional, Literal, Union, Annotated
 from pydantic import BaseModel, Field, model_validator, JsonValue
 from .types import E164PhoneNumber, ActionItem, Language, DTMFDigit
+from typing_extensions import deprecated
 
 class StartOutboundCallCommand(BaseModel):
     command_type: Literal["start-outbound"] = "start-outbound"
@@ -8,6 +9,7 @@ class StartOutboundCallCommand(BaseModel):
     from_number: Optional[E164PhoneNumber]
     to_number: E164PhoneNumber
 
+@deprecated("This is only for v1/listen-inbound, which is deprecated.")
 class ListenInboundCommand(BaseModel):
     command_type: Literal["listen-inbound"] = "listen-inbound"
     agent_number: Optional[E164PhoneNumber] = None
@@ -54,8 +56,14 @@ class ActionSuggestionCommand(BaseModel):
     command_type: Literal["action-suggestion"] = "action-suggestion"
     intent_id: str
     # Legacy fields for unambiguous intents, preserved so older SDKs keep working.
-    action_key: Optional[str] = None
-    action_description: str = ''
+    action_key: Optional[str] = Field(
+        default=None,
+        deprecated="action_key is deprecated; use actions instead.",
+    )
+    action_description: str = Field(
+        default='',
+        deprecated="action_description is deprecated; use actions instead.",
+    )
     # Empty list = no match. One element = single unambiguous intent. Multiple = ambiguous intent.
     actions: list[ActionCandidate] = Field(default_factory=list)
 
@@ -144,7 +152,7 @@ Command = Annotated[
         AnswerQuestionCommand,
         ActionSuggestionCommand,
         ReadScriptCommand,
-        ListenInboundCommand,
+        ListenInboundCommand,  # ty:ignore[deprecated]
         SetTaskCommand,
         RejectInboundCallCommand,
         AcceptInboundCallCommand,

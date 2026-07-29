@@ -54,7 +54,7 @@ def _fire_trigger(
                 trigger_url,
                 headers=agent._client._get_headers(),
             ))
-            logger.info("Call triggered by %s.", trigger_name)
+            logger.debug("Starting call triggered by %s.", trigger_name)
         except Exception:
             logger.exception("Failed to trigger local call from %s", trigger_name)
             agent._edge_idle.set()
@@ -97,7 +97,8 @@ def run_wakeword_loop(agent: Agent, trigger_url: str) -> None:
             if verifier >= WAKEWORD_THRESHOLD:
                 streak += 1
                 if streak >= WAKEWORD_PATIENCE and (now - last_detection) > WAKEWORD_COOLDOWN:
-                    logger.info("Wakeword detected (score=%.3f, streak=%d)", verifier, streak)
+                    logger.debug("Wakeword Score (score=%.3f, streak=%d)", verifier, streak)
+                    logger.info("Wakeword detected")
                     last_detection = now
                     streak = 0
                     interp.reset()
@@ -156,8 +157,6 @@ def run_button_loop(
     if has_wakeword:
         prompt += " (or say the wakeword)"
     prompt += "...\n"
-    logger.info("Listening locally. %s", prompt.strip())
-    logger.info("Trigger URL: %s", trigger_url)
     sys.stdout.write(prompt)
     sys.stdout.flush()
 
@@ -165,7 +164,7 @@ def run_button_loop(
         try:
             ready, _, _ = select.select([sys.stdin], [], [], 1.0)
         except (ValueError, OSError):
-            logger.info("stdin closed, stopping button-press trigger.")
+            logger.debug("stdin closed, stopping button-press trigger.")
             break
         if not ready:
             continue
@@ -177,6 +176,7 @@ def run_button_loop(
             break
 
         _fire_trigger(agent, "press_enter", trigger_url)
+        agent._edge_idle.wait()
 
         sys.stdout.write(prompt)
         sys.stdout.flush()

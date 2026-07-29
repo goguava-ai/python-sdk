@@ -9,7 +9,7 @@ from threading import Thread
 
 logger = logging.getLogger("guava.health")
 
-HealthState = Literal["starting", "live", "stopped"]
+HealthState = Literal["starting", "running", "draining", "stopped"]
 
 class HealthContext:
     def __init__(self):
@@ -19,13 +19,21 @@ class HealthContext:
         self._state = new_state
 
     def ready(self):
-        self.set_state("live")
+        self.set_state("running")
+
+    def draining(self):
+        self.set_state("draining")
 
     def stopped(self):
         self.set_state("stopped")
 
     def is_live(self) -> bool:
-        return self._state == "live"
+        """This is designed to map onto a Kubernetes liveness probe."""
+        return self._state != "stopped"
+
+    def is_ready(self) -> bool:
+        """This is designed to map onto a Kubernetes readiness probe."""
+        return self._state == "running"
     
 class MultiHealthContext:
     def __init__(self):
@@ -37,7 +45,12 @@ class MultiHealthContext:
         return ctx
 
     def is_live(self) -> bool:
+        """Returns true if all of the sub-contexts are live."""
         return len(self._ctxs) > 0 and all(ctx.is_live() for ctx in self._ctxs)
+
+    def is_ready(self) -> bool:
+        """Returns true if all of the sub-contexts are ready."""
+        return len(self._ctxs) > 0 and all(ctx.is_ready() for ctx in self._ctxs)
 
 
 class HealthServer:
@@ -54,15 +67,13 @@ class HealthServer:
         class RequestHandler(BaseHTTPRequestHandler):
             def do_GET(self):
                 if self.path == "/live":
-                    if health_ctx.is_live():
-                        self.send_response(200)
-                    else:
-                        self.send_response(503)
-
-                    self.end_headers()
+                    self.send_response(200 if health_ctx.is_live() else 503)
+                elif self.path == "/ready":
+                    self.send_response(200 if health_ctx.is_ready() else 503)
                 else:
                     self.send_response(404)
-                    self.end_headers()
+                
+                self.end_headers()
 
             def log_message(self, format, *args):
                 logger.debug("[health server] " + format, *args)

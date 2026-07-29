@@ -22,7 +22,7 @@ from .commands import (
 from pydantic import BaseModel
 from typing import Optional, TypeVar, Type, Callable, Any, TYPE_CHECKING
 from urllib.parse import urljoin, urlencode
-from .call_controller import CallController, CommandQueueEnd
+from .call_controller import CallController, CommandQueueEnd  # ty: ignore[deprecated]
 
 from importlib.metadata import version, PackageNotFoundError
 from .threading_utils import FirstEntry
@@ -34,6 +34,7 @@ from .auth import AuthStrategy, APIKeyAuth, GuavaDeploy, GUAVA_DEPLOY_TOKEN_PATH
 from .telemetry import telemetry_client
 from guava.types.call_info import CallInfo, PSTNCallInfo
 from datetime import timedelta, datetime, timezone
+from typing_extensions import deprecated
 
 if TYPE_CHECKING:
     from . import campaigns
@@ -52,7 +53,7 @@ except PackageNotFoundError:
 logger = logging.getLogger("guava")
 
 
-U = TypeVar("U", bound=CallController)
+U = TypeVar("U", bound=CallController)  # ty: ignore[deprecated]
 
 first_client = FirstEntry()
 
@@ -139,12 +140,34 @@ class Client:
         check_response(r)
         return r.json()['sip_code']
 
+    def get_campaign(self, campaign_code: str) -> "campaigns.Campaign":
+        """Fetch an existing campaign by code."""
+        from .campaigns import Campaign
+        response = check_response(httpx.get(
+            self.get_http_url(f'v1/campaigns/{campaign_code}'),
+            headers=self._get_headers(),
+        )).json()
+
+        return Campaign(self, response['id'], response['campaign_code'], response['name'])
+
+    def list_campaigns(self) -> list["campaigns.Campaign"]:
+        from .campaigns import Campaign
+
+        response = check_response(httpx.get(
+            self.get_http_url('v1/campaigns'),
+            headers=self._get_headers(),
+        )).json()
+
+        return [Campaign(self, c['id'], c['campaign_code'], c['name']) for c in response]
+
+
+    @deprecated("CallController is deprecated. Please switch to the Agent / Call API.")
     def create_outbound(
         self,
         *,
         from_number: str,
         to_number: str,
-        call_controller: CallController,
+        call_controller: CallController,  # ty: ignore[deprecated]
     ):
         """
         Create an outbound phone call, and attach the given call controller.
@@ -213,7 +236,7 @@ class Client:
                 
             logger.debug("Call controller succesfully shut down...")
             
-
+    @deprecated("CallController is deprecated. Please switch to the Agent / Call API.")
     def listen_inbound(self, *, agent_number: str | None = None, webrtc_code: str | None = None, sip_code: str | None = None, controller_class: Type[U] | None = None, controller_factory: Callable[[CallInfo], U | None] | None = None):
         if not check_exactly_one(agent_number, webrtc_code, sip_code):
             raise TypeError("One of agent_number, webrtc_code, or sip_code must be provided.")
@@ -276,7 +299,7 @@ class Client:
                             logger.exception("Failed to initialize call controller.")
 
 
-    # this is the one the client calls. it hits the endpoint that creates the websocket and its handler...
+    @deprecated("CallController is deprecated. Please switch to the Agent / Call API.")
     def serve_campaign(
         self,
         *,

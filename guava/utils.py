@@ -62,27 +62,7 @@ def preview(feature: str) -> Callable[[F], F]:
             return fn(*args, **kwargs)
 
         return cast(F, wrapper)
-    
-    return decorator
 
-def deprecated(feature: str) -> Callable[[F], F]:
-    """Decorator that emits warnings for deprecated features."""
-    
-    def decorator(fn: F) -> F:
-        first_entry = FirstEntry()
-
-        @functools.wraps(fn)
-        def wrapper(*args: Any, **kwargs: Any) -> Any:
-            if first_entry.claim():
-                warnings.warn(
-                    f'Feature "{feature}" is deprecated and may be removed in future versions.',
-                    category=UserWarning,
-                    stacklevel=2,
-                )
-            return fn(*args, **kwargs)
-
-        return cast(F, wrapper)
-    
     return decorator
 
 class NoOpLogger:

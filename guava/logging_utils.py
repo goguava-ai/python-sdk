@@ -47,6 +47,9 @@ def configure_logging():
     
     warnings.formatwarning = format_warning # type: ignore
 
+    # Un-hide DeprecationWarning, which is suppressed by default.
+    warnings.filterwarnings("default", category=DeprecationWarning)
+
     logging.captureWarnings(True)
     logging.config.dictConfig(
         {

@@ -24,7 +24,8 @@ from guava.socket.client import GuavaSocket, GuavaSocketClosedError
 from . import listen_inbound
 from guava.call import Call
 from .utils import check_response, is_jsonable
-from guava import campaigns, guavadialer_events
+from typing_extensions import deprecated
+from guava import guavadialer_events
 from pydantic import BaseModel
 from functools import partial
 from guava.types.call_info import PSTNCallInfo
@@ -60,7 +61,6 @@ from .commands import (
 )
 from guava.call_controller import CommandQueueEnd
 from guava.edge_wake import run_wakeword_loop, run_wake_loop, run_button_loop
-from .utils import preview
 from .health import HealthContext, get_health_server
 
 logger = logging.getLogger("guava.agent")
@@ -73,8 +73,8 @@ def edge_only(fn):
     def wrapper(*args, **kwargs):
         if not os.environ.get("GUAVA_EDGE"):
             raise RuntimeError(
-                f"{fn.__name__}() feature is only available when running with --edge "
-                f"(e.g. `guava run --edge`). This feature is currently unavailable for public use " # TODO: remove
+                f"{fn.__name__}() is only available when running with --edge "
+                f"(e.g. `guava run --edge`)"
             )
         return fn(*args, **kwargs)
     return wrapper
@@ -700,9 +700,9 @@ class Agent:
             while True:
                 try:
                     webrtc_code = self._client.create_webrtc_agent(ttl=timedelta(hours=24))
-                    logger.info("Listener connected (code=%s…)", webrtc_code[:8])
+                    logger.debug("Listener connected (code=%s…)", webrtc_code[:8])
                     self._listen_inbound(HealthContext(), webrtc_code=webrtc_code, initial_variables=variables)
-                    logger.info("Listener disconnected, renewing code…")
+                    logger.debug("Listener disconnected, renewing code…")
                 except Exception:
                     logger.exception("Listener crashed, reconnecting in 5 s…")
                     time.sleep(5)
@@ -713,17 +713,17 @@ class Agent:
 
         if has_wakeword:
             threading.Thread(target=run_wakeword_loop, args=(self, trigger_url), daemon=True).start()
-            logger.info("Wakeword detection active (nanowakeword).")
+            logger.debug("Wakeword detection active.")
 
         if has_wake:
             assert self._edge_wake_trigger is not None
             threading.Thread(target=run_wake_loop, args=(self, trigger_url, self._edge_wake_trigger), daemon=True).start()
-            logger.info("Custom wake trigger active.")
+            logger.debug("Custom wake trigger active.")
 
         if has_button:
             run_button_loop(self, trigger_url, has_wakeword=has_wakeword)
         else:
-            logger.info("Listening locally (no Enter key trigger).")
+            logger.debug("Listening locally (no Enter key trigger).")
             threading.Event().wait()
 
     def _listen_inbound(self, health_ctx: HealthContext, agent_number: str | None = None, webrtc_code: str | None = None, sip_code: str | None = None, initial_variables: dict[str, Any] = {}):
@@ -805,7 +805,7 @@ class Agent:
         health_ctx: HealthContext,
         campaign_code: str,
     ):
-        campaign = campaigns.get_campaign_by_code(campaign_code)
+        campaign = self._client.get_campaign(campaign_code)
         def initiate_call(call_id: str, contact_data: Any):
             # TODO: The server needs to send the from_number that it chose in the case of multiple.
             # outbound numbers attached to a campaign.
@@ -865,17 +865,11 @@ class Agent:
         with get_health_server(health_ctx):
             self._serve_campaign(health_ctx, campaign_code)
 
-    @preview("Agent Testing")
+    @deprecated("test_roleplay() is deprecated; use roleplay() instead.")
     def test_roleplay(self, roleplay_prompt: str, variables=None) -> "TestSession":
         """Deprecated: use agent.roleplay() instead."""
-        warnings.warn(
-            "test_roleplay() is deprecated; use roleplay() instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
         return self.roleplay(roleplay_prompt, variables)
 
-    @preview("Agent Testing")
     def roleplay(self, roleplay_prompt: str, variables=None) -> "TestSession":
         """Run an automated test conversation where an LLM plays the caller.
 
@@ -940,7 +934,6 @@ Choose "speak" and provide your next utterance, or choose "hangup" if the conver
 
         return session
 
-    @preview("Agent Testing")
     def chat(self, variables=None) -> None:
         """Start an interactive terminal chat session with the agent.
 
@@ -1101,7 +1094,6 @@ Choose "speak" and provide your next utterance, or choose "hangup" if the conver
             except KeyboardInterrupt:
                 pass
 
-    @preview("Agent Testing")
     def patch(self) -> "Agent":
         """Return a copy of this agent with independently overridable callbacks.
 
@@ -1122,7 +1114,6 @@ Choose "speak" and provide your next utterance, or choose "hangup" if the conver
 
         return cloned
 
-    @preview("Agent Testing")
     @contextmanager
     def test(self, variables=None) -> Iterator[TestSession]:
         """Context manager that runs the agent against a live test session.

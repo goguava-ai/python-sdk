@@ -44,12 +44,14 @@ from .types import Field, Language, Say, ReachPersonOutcome
 from typing import Optional, Union, Callable, Any
 from websockets.sync.client import ClientConnection
 from guava.telemetry import telemetry_client
+from typing_extensions import deprecated
 
 logger = logging.getLogger("guava.call_controller")
 
 class CommandQueueEnd:
     pass
 
+@deprecated("CallController is deprecated. Please switch to the Agent / Call API.")
 @telemetry_client.track_class(only_exceptions={"on_event", "on_caller_speech", "on_agent_speech"})
 class CallController:
     _command_queue: queue.Queue[Command | CommandQueueEnd]
@@ -75,9 +77,9 @@ class CallController:
         instance._current_task_id = None
         instance._started = False
         registered_hooks = RegisteredHooksCommand(
-            has_on_question=instance.on_question.__func__ is not CallController.on_question,
-            has_on_intent=instance.on_intent.__func__ is not CallController.on_intent,
-            has_on_action_requested=instance.on_action_request.__func__ is not CallController.on_action_request,
+            has_on_question=instance.on_question.__func__ is not CallController.on_question,  # ty: ignore[deprecated]
+            has_on_intent=instance.on_intent.__func__ is not CallController.on_intent,  # ty: ignore[deprecated]
+            has_on_action_requested=instance.on_action_request.__func__ is not CallController.on_action_request,  # ty: ignore[deprecated]
         )
         instance.send_command(registered_hooks)
         if registered_hooks.has_on_intent:
@@ -90,7 +92,7 @@ class CallController:
                         f"Your call controller {cls.__name__} overrides both on_intent and on_action_requested. `on_intent` will be disabled.",
                         UserWarning)
 
-        if instance.on_incoming_call.__func__ is not CallController.on_incoming_call:
+        if instance.on_incoming_call.__func__ is not CallController.on_incoming_call:  # ty: ignore[deprecated]
             warnings.warn(
                 f"Your call controller {cls.__name__} overrides on_incoming_call, which is deprecated - this function may be removed in the future. Use listen_inbound(controller_factory=...) instead to receive information about the inbound caller.",
                 UserWarning)

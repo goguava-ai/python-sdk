@@ -1,6 +1,6 @@
 from .client import Client, PhoneNumberInfo
 from .types import Field, Say, Todo
-from .call_controller import CallController
+from .call_controller import CallController  # ty: ignore[deprecated]
 from .types.call_info import CallInfo
 from .types.incoming_call_action import IncomingCallAction, AcceptCall, DeclineCall
 from .agent import Agent, SuggestedAction

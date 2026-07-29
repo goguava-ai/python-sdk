@@ -20,6 +20,7 @@ class MockCall(Call):
         self._command_queue: list[Command] = []
         self._field_values: dict[str, Any] = {}
         self._variables: dict[str, Any] = {}
+        self._field_keys_by_task_id: dict[str, list[str]] = {}
 
     def set_field(self, field_name: str, field_value: Any) -> None:
         """Set a field value on the mock call.
