@@ -32,11 +32,12 @@ logger = logging.getLogger("guava.testing.session")
 
 
 class TestSession:
-    def __init__(self, ws: Connection):
+    def __init__(self, ws: Connection, id: str):
         self._ws = ws
         self._events = []
         self.executed_actions: List[str] = []
         self.termination_reason: str | None = None
+        self.id: str = id
 
     def _send(self, command: TestingCommand):
         self._ws.send(command.model_dump_json())

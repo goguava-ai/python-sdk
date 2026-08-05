@@ -329,16 +329,37 @@ class GuavaSocket(Generic[SendT, RecvT]):
             except ConnectionClosed:
                 self._should_reconnect.set()
 
-    def recv(self) -> RecvT:
+    def recv(self, timeout: float | None = None) -> RecvT:
+        """Receive and deserialize the next message.
+
+        Args:
+            timeout: Maximum number of seconds to wait for a message. If None
+                (the default), block until a message arrives or the socket closes.
+
+        Returns:
+            The next deserialized message.
+
+        Raises:
+            GuavaSocketClosedError: If the socket is (or becomes) permanently closed.
+            TimeoutError: If no message arrives within ``timeout`` seconds.
+        """
         assert self._state != "never-opened"
-        
+
+        deadline = float("inf") if timeout is None else time.monotonic() + timeout
+
         # Keep running in a loop until the socket is closed or we get an actual message.
         while True:
             if self._state == "closed":
                 raise GuavaSocketClosedError(self._close_reason, self._close_description)
-            
+
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError()
+
+            # Poll at most once per second so we keep re-checking the closed state,
+            # but never wait past the caller's deadline.
             try:
-                message = self._recv_queue.get(block=True, timeout=1)
+                message = self._recv_queue.get(block=True, timeout=min(1.0, remaining))
                 return self._deserializer(message)
             except Empty:
                 continue

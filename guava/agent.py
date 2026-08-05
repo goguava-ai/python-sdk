@@ -149,7 +149,7 @@ class Agent:
         self._on_session_end: Optional[Callable[[Call, BotSessionEnded], None] | Callable[[Call], None]] = None
         self._on_outbound_failed: Optional[Callable[[OutboundCallFailed], None]] = None
 
-        self._on_escalate: Optional[Callable[[Call], None]] = None
+        self._on_escalate: Optional[Callable[[Call, EscalateEvent], None] | Callable[[Call], None]] = None
         self._on_dtmf: Optional[Callable[[Call, DTMFPressedEvent], None]] = None
 
         self._edge_callbacks: dict[str, Callable[[Call], None]] = {}  # "press_enter" | "wakeword" | "wake"
@@ -342,9 +342,11 @@ class Agent:
             return decorator
         
     @overload
+    def on_escalate(self, fn: Callable[[Call, EscalateEvent], None], /) -> Callable[[Call, EscalateEvent], None]: ...
+    @overload
     def on_escalate(self, fn: Callable[[Call], None], /) -> Callable[[Call], None]: ...
     @overload
-    def on_escalate(self) -> Callable[[Callable[[Call], None]], Callable[[Call], None]]: ...
+    def on_escalate(self) -> Callable[[Callable[[Call, EscalateEvent], None]], Callable[[Call, EscalateEvent], None]]: ...
 
     def on_escalate(self, fn=None):
         return self._register("_on_escalate", fn)
@@ -558,7 +560,17 @@ class Agent:
             case EscalateEvent():
                 if self._on_escalate is not None:
                     # Inform the agent on escalation error.
-                    self._invoke_handler(call, "on_escalate", True, self._on_escalate, call)
+                    # Pass event if accepted; single-arg form is deprecated.
+                    if _accepts_positional_arg(self._on_escalate, 1):
+                        self._invoke_handler(call, "on_escalate", True, cast(Callable[[Call, EscalateEvent], None], self._on_escalate), call, event)
+                    else:
+                        warnings.warn(
+                            "on_escalate handler should accept (Call, EscalateEvent); "
+                            "the single-argument form is deprecated and will be removed in a future version.",
+                            DeprecationWarning,
+                            stacklevel=2,
+                        )
+                        self._invoke_handler(call, "on_escalate", True, cast(Callable[[Call], None], self._on_escalate), call)
                 elif event.requested_by == 'agent':
                     call.send_instruction("No escalation target set. Apologize for not being able to help, ask them to try calling another time, and hang up the call immediately.")
                 elif event.requested_by == 'human':
@@ -726,10 +738,10 @@ class Agent:
             logger.debug("Listening locally (no Enter key trigger).")
             threading.Event().wait()
 
-    def _listen_inbound(self, health_ctx: HealthContext, agent_number: str | None = None, webrtc_code: str | None = None, sip_code: str | None = None, initial_variables: dict[str, Any] = {}):
+    def _listen_inbound(self, health_ctx: HealthContext, agent_number: str | None = None, webrtc_code: str | None = None, sip_code: str | None = None, initial_variables: dict[str, Any] = {}, drain: threading.Event | None = None):
         if not check_exactly_one(agent_number, webrtc_code, sip_code):
             raise TypeError("One of agent_number, webrtc_code, or sip_code must be provided.")
-        
+
 
         query = {}
         if agent_number:
@@ -740,6 +752,9 @@ class Agent:
             query["sip_code"] = sip_code
         query_string = urlencode(query)
 
+        # Calls we've handed off to background threads, so we can wait for them
+        # to finish while draining.
+        active_calls: list[threading.Thread] = []
         try:
             with GuavaSocket[listen_inbound.ClientMessage, listen_inbound.ServerMessage](
                     "listen-inbound",
@@ -748,10 +763,14 @@ class Agent:
                     serializer=lambda msg: msg.model_dump(),
                     deserializer=listen_inbound.decode_server_message,
                 ) as gs:
-                
-                # Start listening and get the response.
-                while gs.is_open():
-                    server_message = gs.recv()
+
+                # Start listening and get the response. Stop accepting new calls once
+                # asked to drain; recv() times out periodically so we can re-check.
+                while gs.is_open() and not (drain and drain.is_set()):
+                    try:
+                        server_message = gs.recv(timeout=1.0)
+                    except TimeoutError:
+                        continue
                     match server_message:
                         case listen_inbound.ListenStarted():
                             health_ctx.ready()
@@ -775,12 +794,21 @@ class Agent:
                                     logger.info("Accepting call...")
                                     gs.send(listen_inbound.AnswerCall(call_id=server_message.call_id))
 
-                                    threading.Thread(target=self._attach_to_call, args=(server_message.call_id, server_message.call_info, initial_variables), daemon=True).start()
+                                    t = threading.Thread(target=self._attach_to_call, args=(server_message.call_id, server_message.call_info, initial_variables), daemon=True)
+                                    active_calls.append(t) # TODO: Possible memory leak
+                                    t.start()
                                 else:
                                     logger.error("Unknown action for incoming call: %r", call_action)
                             except Exception:
                                 logger.exception("Failed to initialize call controller.")
         finally:
+            # Stop advertising readiness, then wait for in-flight calls to finish.
+            health_ctx.draining()
+            alive = [t for t in active_calls if t.is_alive()]
+            if alive:
+                logger.info("Draining - waiting for %d active call(s) to finish.", len(alive))
+                for t in alive:
+                    t.join()
             health_ctx.stopped()
 
     def call_phone(self, from_number, to_number, variables: dict[str, Any] = {}) -> None:
@@ -804,6 +832,7 @@ class Agent:
         self,
         health_ctx: HealthContext,
         campaign_code: str,
+        drain: threading.Event | None = None,
     ):
         campaign = self._client.get_campaign(campaign_code)
         def initiate_call(call_id: str, contact_data: Any):
@@ -815,6 +844,10 @@ class Agent:
             gs.send(guavadialer_events.ControllerReady(call_id=call_id))
             self._attach_to_call(call_id, call_info, initial_variables=data, route="v2/connect-campaign-call")
 
+        # Calls we've handed off to background threads, so we can wait for them
+        # to finish while draining.
+        active_call_threads: list[threading.Thread] = []
+
         logger.info("Connecting to campaign '%s' (id: %s).", campaign.name, campaign.id)
         try:
             with GuavaSocket[guavadialer_events.ClientMessage, guavadialer_events.ServerMessage](
@@ -825,36 +858,38 @@ class Agent:
                     deserializer=guavadialer_events.decode_server_message,
                 ) as gs:
 
-                active_call_threads: list[threading.Thread] = []
-
-                try:
-                    while gs.is_open():
-                        server_message = gs.recv()
-                        match server_message:
-                            case guavadialer_events.ListenStarted():
-                                logger.info("Listening for calls on campaign '%s'. Ready.", campaign.name)
-                                health_ctx.ready()
-                            case guavadialer_events.InitiateAndAssignCall():
-                                # Only used in controller mode. In headless mode the server handles calls directly.
-                                log_phone = server_message.contact_data.get('phone_number') if server_message.contact_data else '?'
-                                logger.info("Ready to make call, id %s — initiating call setup and dispatch for contact %s.", server_message.call_id, log_phone)
-                                t = threading.Thread(
-                                    target=initiate_call,
-                                    args=(server_message.call_id, server_message.contact_data),
-                                    daemon=True,
-                                )
-                                active_call_threads.append(t)
-                                t.start()
-                except KeyboardInterrupt:
-                    alive = [t for t in active_call_threads if t.is_alive()]
-                    if alive:
-                        logger.info("Received Ctrl-C. Detaching from campaign - waiting for %d active calls to finish (Ctrl-C again to force exit).", len(alive))
-                        for t in alive:
-                            t.join()
-                        logger.info("All active calls finished. Shutting down.")
+                # Stop accepting new calls once asked to drain; recv() times out
+                # periodically so we can re-check.
+                while gs.is_open() and not (drain and drain.is_set()):
+                    try:
+                        server_message = gs.recv(timeout=1.0)
+                    except TimeoutError:
+                        continue
+                    match server_message:
+                        case guavadialer_events.ListenStarted():
+                            logger.info("Listening for calls on campaign '%s'. Ready.", campaign.name)
+                            health_ctx.ready()
+                        case guavadialer_events.InitiateAndAssignCall():
+                            # Only used in controller mode. In headless mode the server handles calls directly.
+                            log_phone = server_message.contact_data.get('phone_number') if server_message.contact_data else '?'
+                            logger.info("Ready to make call, id %s — initiating call setup and dispatch for contact %s.", server_message.call_id, log_phone)
+                            t = threading.Thread(
+                                target=initiate_call,
+                                args=(server_message.call_id, server_message.contact_data),
+                                daemon=True,
+                            )
+                            active_call_threads.append(t) # TODO: Possible memory leak
+                            t.start()
         except GuavaSocketClosedError:
             logger.info("Campaign '%s' disconnected.", campaign.name)
         finally:
+            # Stop advertising readiness, then wait for in-flight calls to finish.
+            health_ctx.draining()
+            alive = [t for t in active_call_threads if t.is_alive()]
+            if alive:
+                logger.info("Draining - waiting for %d active call(s) to finish.", len(alive))
+                for t in alive:
+                    t.join()
             health_ctx.stopped()
 
     def attach_campaign(
@@ -1143,7 +1178,7 @@ Choose "speak" and provide your next utterance, or choose "hangup" if the conver
             ) as ws:
                 session_started = SessionStarted.model_validate_json(ws.recv())
 
-                test_session = TestSession(ws)
+                test_session = TestSession(ws, session_started.session_id)
                 call_thread = threading.Thread(
                     target=self._attach_to_call,
                     args=(session_started.session_id, PSTNCallInfo(from_number=None, to_number="+15555555555")),
