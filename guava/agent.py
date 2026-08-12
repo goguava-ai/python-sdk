@@ -615,9 +615,11 @@ class Agent:
         is_edge = self._edge_trigger is not None
         if is_edge:
             self._edge_idle.clear()
-        try:
-            command_thread = None
 
+        call = None
+        command_thread = None
+
+        try:
             call = self._init_call(call_id, call_info, initial_variables)
 
             with GuavaSocket[Command, Event | None](
@@ -654,7 +656,8 @@ class Agent:
                     if isinstance(event, (BotSessionEnded, OutboundCallFailed)):
                         break
         finally:
-            call._shutdown_queue()
+            if call:
+                call._shutdown_queue()
             if command_thread:
                 command_thread.join()
             if is_edge:

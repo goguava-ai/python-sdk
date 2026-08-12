@@ -179,12 +179,40 @@ class Call:
         return field_key in self._field_values
 
     def transfer(self, destination: str, instructions: str | None = None):
+        """Transfer the call to another destination.
+
+        This method does not interfere with turn-taking — use this when
+        you want the agent to naturally transfer the call.
+
+        Args:
+            destination: The phone number or SIP address to transfer the call to.
+            instructions: Optional guidance for how the agent should handle the transfer.
+        """
         # TODO: Verify that destination is a phone number or SIP address.
         self.send_command(
             TransferCommand(
                 transfer_message=instructions or "Notify the caller that you will be transferring them, and then transfer.",
                 to_number=destination,
                 soft_transfer=True
+            )
+        )
+
+    def immediate_transfer(self, destination: str, final_script: str | None = None):
+        """Transfer the call immediately.
+
+        Unlike transfer(), this does not respect turn-taking. The agent immediately
+        initiates the transfer, saying the script (if provided).
+
+        Args:
+            destination: The phone number or SIP address to transfer the call to.
+            final_script: Optional message for the agent to deliver immediately
+                before transferring. Defaults to no message.
+        """
+        self.send_command(
+            TransferCommand(
+                transfer_message=final_script or "",
+                to_number=destination,
+                soft_transfer=False
             )
         )
 
