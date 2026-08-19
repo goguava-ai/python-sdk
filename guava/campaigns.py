@@ -57,6 +57,10 @@ class Campaign:
         return self._id
 
     @property
+    def code(self) -> str:
+        return self._code
+
+    @property
     def name(self) -> str:
         return self._name
 
@@ -87,7 +91,7 @@ class Campaign:
 
     def get_status(self) -> CampaignStatus:
         response = httpx.get(
-            self._client.get_http_url(f"v1/campaigns/{self.id}/status"),
+            self._client.get_http_url(f"v2/campaigns/{self._code}/status"),
             headers=self._client._get_headers(),
         )
         check_response(response)
@@ -95,7 +99,7 @@ class Campaign:
 
     def delete(self) -> None:
         response = httpx.delete(
-            self._client.get_http_url(f"v1/campaigns/{self._id}"),
+            self._client.get_http_url(f"v2/campaigns/{self._code}"),
             headers=self._client._get_headers(),
         )
         check_response(response)

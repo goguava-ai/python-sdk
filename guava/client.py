@@ -144,7 +144,7 @@ class Client:
         """Fetch an existing campaign by code."""
         from .campaigns import Campaign
         response = check_response(httpx.get(
-            self.get_http_url(f'v1/campaigns/{campaign_code}'),
+            self.get_http_url(f'v2/campaigns/{campaign_code}'),
             headers=self._get_headers(),
         )).json()
 
@@ -154,7 +154,7 @@ class Client:
         from .campaigns import Campaign
 
         response = check_response(httpx.get(
-            self.get_http_url('v1/campaigns'),
+            self.get_http_url('v2/campaigns'),
             headers=self._get_headers(),
         )).json()
 
@@ -366,6 +366,7 @@ class Client:
                 listen_events_thread.join()
 
         campaign_id = campaign.id
+        campaign_code = campaign.code
         campaign_name = campaign.name
         logger.info("Connecting to campaign '%s' (id: %s).", campaign_name, campaign_id)
         try:
@@ -387,7 +388,7 @@ class Client:
                         _time.sleep(5)
                         try:
                             r = httpx.get(
-                                self.get_http_url(f"v1/campaigns/{campaign_id}/has-callable-contacts"),
+                                self.get_http_url(f"v2/campaigns/{campaign_code}/has-callable-contacts"),
                                 headers=self._get_headers(),
                             )
                             check_response(r)
@@ -434,7 +435,7 @@ class Client:
                             )
                             try:
                                 r = httpx.patch(
-                                    self.get_http_url(f"v1/campaigns/{campaign_id}"),
+                                    self.get_http_url(f"v2/campaigns/{campaign_code}"),
                                     json={"enabled": False},
                                     headers=self._get_headers(),
                                 )

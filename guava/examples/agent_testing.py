@@ -1,4 +1,5 @@
 import unittest
+from pathlib import Path
 
 import guava
 from guava import logging_utils
@@ -53,6 +54,11 @@ class TestHelpDeskAgent(unittest.TestCase):
             # If any of these criteria fail, the 'evaluate' call fails.
             fail_criteria=["The agent transferred the caller to the sales department."],
         )
+
+    def test_audio(self):
+        """Test an agent by injecting audio."""
+        input_wav = Path(__file__).parent / "example-caller-audio.wav"
+        help_desk_agent.test_audio(input_wav, "/tmp/guava-agent-audio.wav")
 
 
 if __name__ == "__main__":

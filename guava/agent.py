@@ -8,6 +8,7 @@ import threading
 import time
 import warnings
 import httpx
+from pathlib import Path
 
 from typing import TYPE_CHECKING, Callable, Iterator, overload, Optional, Any, ParamSpec, cast, Literal
 from websockets.sync.client import connect as ws_connect
@@ -23,7 +24,7 @@ from urllib.parse import urlencode
 from guava.socket.client import GuavaSocket, GuavaSocketClosedError
 from . import listen_inbound
 from guava.call import Call
-from .utils import check_response, is_jsonable
+from .utils import check_response, is_jsonable, preview
 from typing_extensions import deprecated
 from guava import guavadialer_events
 from pydantic import BaseModel
@@ -118,11 +119,12 @@ class SuggestedAction(BaseModel):
 
 @telemetry_client.track_class()
 class Agent:
-    def __init__(self, name: Optional[str] = None, organization: Optional[str] = None, purpose: Optional[str] = None, voice: Optional[str] = None, accept_dtmf=True):
+    def __init__(self, name: Optional[str] = None, organization: Optional[str] = None, purpose: Optional[str] = None, voice: Optional[str] = None, pronunciations: Optional[dict[str, str]] = None, accept_dtmf=True):
         self._name: Optional[str] = name
         self._organization: Optional[str] = organization
         self._purpose: Optional[str] = purpose
         self._voice: Optional[str] = voice
+        self._tts_replacements: Optional[dict[str, str]] = pronunciations or None
         self._accept_dtmf_for_numbers = accept_dtmf
 
         self._client = Client()
@@ -584,7 +586,8 @@ class Agent:
             agent_name=self._name,
             agent_purpose=self._purpose,
             organization_name=self._organization,
-            voice=self._voice
+            voice=self._voice,
+            pronunciations=self._tts_replacements,
         )
         call.send_command(
             RegisteredHooksCommand(
@@ -690,6 +693,29 @@ class Agent:
             "initial_variables": variables,
         }, daemon=True).start()
         run_webrtc_helper(webrtc_code, self._client._base_url)
+
+    @preview("Agent Audio Testing")
+    def test_audio(self, input_wav: str | Path, output_wav: str | Path, variables: dict[str, Any] = {}) -> None:
+        """Run a local call driven by a WAV file instead of a live microphone.
+
+        Injects input_wav as the microphone and writes the agent's audio to
+        output_wav, useful for scripted/regression testing of an agent.
+
+        Args:
+            input_wav: 16-bit PCM WAV file to inject as the microphone.
+            output_wav: Path to write the captured agent audio to.
+            variables: Initial variables to pass to the agent.
+        """
+        if not Path(input_wav).is_file():
+            raise FileNotFoundError(f"input_wav not found: {input_wav}")
+
+        webrtc_code = self._client.create_webrtc_agent(ttl=timedelta(minutes=5))
+        threading.Thread(target=self._listen_inbound, kwargs={
+            "health_ctx": HealthContext(), # No health-server for test_audio.
+            "webrtc_code": webrtc_code,
+            "initial_variables": variables,
+        }, daemon=True).start()
+        run_webrtc_helper(webrtc_code, self._client._base_url, input_wav=str(input_wav), output_wav=str(output_wav))
 
     @edge_only
     def listen_for_wake(self, variables: dict[str, Any] = {}) -> None:

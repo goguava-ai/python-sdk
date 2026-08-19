@@ -1,0 +1,35 @@
+{
+  "version": "0.3.0",
+  "artifacts": [
+    {
+      "os": "darwin",
+      "arch": "aarch64",
+      "url": "https://storage.googleapis.com/gridspace-guava-cli/webrtc/0.3.0/guava-webrtc-darwin-aarch64",
+      "sha256": "d76bce303f6c2a01dc65ddfb112d1573fc8d1afc07ce724eaf96ceae3f6b2999"
+    },
+    {
+      "os": "darwin",
+      "arch": "x86_64",
+      "url": "https://storage.googleapis.com/gridspace-guava-cli/webrtc/0.3.0/guava-webrtc-darwin-x86_64",
+      "sha256": "0a046532ec06f1bf73f42b6fa229c54b5a00c3fd004be3c47e617e0a70d3e7fe"
+    },
+    {
+      "os": "linux",
+      "arch": "aarch64",
+      "url": "https://storage.googleapis.com/gridspace-guava-cli/webrtc/0.3.0/guava-webrtc-linux-aarch64",
+      "sha256": "9e02c82082396da251560bd3d31ab1e4146f41c39d9d37593077cd49b853f77a"
+    },
+    {
+      "os": "linux",
+      "arch": "x86_64",
+      "url": "https://storage.googleapis.com/gridspace-guava-cli/webrtc/0.3.0/guava-webrtc-linux-x86_64",
+      "sha256": "87f9f0442af3f06f6476d707528ebe4e544c56fc0da4422c547e98f9aa6e668b"
+    },
+    {
+      "os": "windows",
+      "arch": "x86_64",
+      "url": "https://storage.googleapis.com/gridspace-guava-cli/webrtc/0.3.0/guava-webrtc-windows-x86_64.exe",
+      "sha256": "b4a37fbdc73ec5240944bcfd1beda596dbfd9fca482a33aab82142d85f3a67f0"
+    }
+  ]
+}

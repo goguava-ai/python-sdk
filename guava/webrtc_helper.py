@@ -1,59 +1,41 @@
+import json
 import platform
 import stat
 import subprocess
 import sys
-from dataclasses import dataclass
+from importlib.resources import files
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
+import logging
+
+from pydantic import BaseModel, StringConstraints
 
 from .utils import platform_config_dir, download_and_check
 
+OsName = Literal["linux", "darwin", "windows"]
+Arch = Literal["aarch64", "x86_64"]
+Sha256 = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
 
-@dataclass
-class ManifestEntry:
-    os: Literal["linux", "darwin", "win32"]
-    arch: Literal["aarch64", "x86_64"]
+logger = logging.getLogger(__name__)
+
+class ManifestEntry(BaseModel):
+    os: OsName
+    arch: Arch
     url: str
-    sha256: str
-
-HELPER_VERSION = "0.2.0"
+    sha256: Sha256
 
 
-MANIFEST: list[ManifestEntry] = [
-    ManifestEntry(
-        os="darwin",
-        arch="aarch64",
-        url="https://storage.googleapis.com/gridspace-guava-cli/webrtc/0.2.0/guava-webrtc-darwin-aarch64",
-        sha256="4f42f9d75fe1b78b9e4f794a475d6d01d6f18c0865d65b4ad14368d28a7e0b95",
-    ),
-    ManifestEntry(
-        os="darwin",
-        arch="x86_64",
-        url="https://storage.googleapis.com/gridspace-guava-cli/webrtc/0.2.0/guava-webrtc-darwin-x86_64",
-        sha256="0532f8a895142d9e4331f4a5552aae15d82fa7652725fdce08c46ba643c147df",
-    ),
-    ManifestEntry(
-        os="linux",
-        arch="aarch64",
-        url="https://storage.googleapis.com/gridspace-guava-cli/webrtc/0.2.0/guava-webrtc-linux-aarch64",
-        sha256="0abaeb725a9c809474adbbe88ee0dc5e6866ebdec724fa87fb44be4433a2f386",
-    ),
-    ManifestEntry(
-        os="linux",
-        arch="x86_64",
-        url="https://storage.googleapis.com/gridspace-guava-cli/webrtc/0.2.0/guava-webrtc-linux-x86_64",
-        sha256="08dc989beb09058185f93e7f5dd4d92a4fb54419f7ba88be17dbaa6e5649ba4b",
-    ),
-    ManifestEntry(
-        os="win32",
-        arch="x86_64",
-        url="https://storage.googleapis.com/gridspace-guava-cli/webrtc/0.2.0/guava-webrtc-windows-x86_64.exe",
-        sha256="3bef8753605a2b84f2c33f4b9760dc084e1cc12f55b886a2a2983e061f4c30bb",
-    ),
-]
+class Manifest(BaseModel):
+    version: str
+    artifacts: list[ManifestEntry]
 
 
-def detect_arch() -> str:
+def load_manifest() -> Manifest:
+    raw = (files("guava") / "webrtc-helper-manifest.json").read_text()
+    return Manifest.model_validate(json.loads(raw))
+
+
+def detect_arch() -> Arch:
     machine = platform.machine().lower()
     if machine in ("arm64", "aarch64"):
         return "aarch64"
@@ -63,24 +45,65 @@ def detect_arch() -> str:
         raise RuntimeError(f"Unsupported architecture for WebRTC helper: {machine}")
 
 
+def detect_os() -> OsName:
+    if sys.platform == "linux":
+        return "linux"
+    elif sys.platform == "darwin":
+        return "darwin"
+    elif sys.platform == "win32":
+        return "windows"
+    else:
+        raise RuntimeError(f"Unsupported platform for WebRTC helper: {sys.platform}")
+
+
 def get_or_download_binary() -> Path:
+    manifest = load_manifest()
     arch = detect_arch()
+    os_name = detect_os()
 
-    entry = next((e for e in MANIFEST if e.os == sys.platform and e.arch == arch), None)
+    entry = next(
+        (e for e in manifest.artifacts if e.os == os_name and e.arch == arch),
+        None,
+    )
     if entry is None:
-        raise RuntimeError(f"No WebRTC helper binary available for {sys.platform}/{arch}")
+        raise RuntimeError(f"No WebRTC helper binary available for {os_name}/{arch}")
 
-    exe_suffix = ".exe" if sys.platform == "win32" else ""
-    binary_path = platform_config_dir() / "guava" / "webrtc" / f"guava-webrtc-{HELPER_VERSION}{exe_suffix}"
+    exe_suffix = ".exe" if os_name == "windows" else ""
+    binary_path = (
+        platform_config_dir() / "guava" / "webrtc" / f"guava-webrtc-{manifest.version}{exe_suffix}"
+    )
 
     if not binary_path.exists():
+        logger.info("Downloading WebRTC helper to %s...", binary_path)
         download_and_check(entry.url, binary_path, entry.sha256)
-        if sys.platform != "win32":
+        if os_name != "windows":
             binary_path.chmod(binary_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
     return binary_path
 
 
-def run_webrtc_helper(webrtc_code: str, base_url: str) -> None:
-    binary_path = get_or_download_binary()
-    subprocess.run([str(binary_path), webrtc_code, "--base-url", base_url], check=True)
+def run_webrtc_helper(
+    webrtc_code: str,
+    base_url: str,
+    input_wav: str | None = None,
+    output_wav: str | None = None,
+) -> None:
+    """Run the WebRTC helper to connect to a call.
+
+    Args:
+        webrtc_code: The WebRTC code to dial.
+        base_url: Base URL of the Guava server.
+        input_wav: Optional 16-bit PCM WAV file to inject as the microphone
+            instead of the real device. Requires output_wav.
+        output_wav: Optional path to write captured far-end audio to instead of
+            the speaker. Requires input_wav.
+    """
+    if (input_wav is None) != (output_wav is None):
+        raise ValueError("input_wav and output_wav must be provided together.")
+
+    args = [str(get_or_download_binary()), webrtc_code, "--base-url", base_url]
+    if input_wav is not None:
+        args += ["--input-wav", input_wav]
+    if output_wav is not None:
+        args += ["--output-wav", output_wav]
+    subprocess.run(args, check=True)

@@ -1,6 +1,6 @@
 [project]
 name = "guava-sdk"
-version = "0.38.0"
+version = "0.39.0"
 description = "The official Python SDK for building Guava voice agents."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -43,7 +43,11 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["guava"]
 exclude = ["internal"]
-artifacts = ["guava/models/**/*.onnx"]
+artifacts = [
+    "guava/models/**/*.onnx",
+    "guava/webrtc-helper-manifest.json",
+    "guava/examples/example-caller-audio.wav",
+]
 
 [tool.hatch.build.targets.sdist]
 exclude = ["internal"]

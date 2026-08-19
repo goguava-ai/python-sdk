@@ -80,6 +80,13 @@ class SetPersona(BaseModel):
     organization_name: Optional[str] = None
     agent_purpose: Optional[str] = None
     voice: Optional[str] = None
+    tts_replacements: Optional[dict[str, str]] = None
+
+    @model_validator(mode="after")
+    def _no_empty_replacement_keys(self):
+        if self.tts_replacements and "" in self.tts_replacements:
+            raise ValueError("pronunciation keys must be non-empty")
+        return self
 
 class SetLanguageMode(BaseModel):
     command_type: Literal["set-language-mode"] = "set-language-mode"

@@ -131,14 +131,16 @@ class Call:
             organization_name: Optional[str] = None,
             agent_name: Optional[str] = None,
             agent_purpose: Optional[str] = None,
-            voice: Optional[str] = None
+            voice: Optional[str] = None,
+            pronunciations: Optional[dict[str, str]] = None
     ):
         self.send_command(
             SetPersona(
                 organization_name=organization_name,
                 agent_name=agent_name,
                 agent_purpose=agent_purpose,
-                voice=voice
+                voice=voice,
+                tts_replacements=pronunciations
             )
         )
 
