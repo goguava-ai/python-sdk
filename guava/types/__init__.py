@@ -24,7 +24,7 @@ OutreachModality = Literal["sms"]
 
 Language = Literal["english", "spanish", "french", "german", "italian"]
 
-FieldTypes = Literal["text", "date", "integer", "multiple_choice", "calendar_slot", "digit_sequence", "cvv"]
+FieldTypes = Literal["text", "date", "integer", "multiple_choice", "calendar_slot", "digit_sequence", "cvv", "credit_card_number"]
 ChoiceGeneratorFunction = Callable[[str], tuple[list[str], list[str]]]
 
 class Field(BaseModel):
