@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field, TypeAdapter
 from .types import E164PhoneNumber, DTMFDigit, TerminationReason
 
 class BaseEvent(BaseModel):
-    sequence: int | None = None
+    pass
 
 @deprecated("This event is no longer used, but retained for comaptibility with older SDK versions.")
 class OutboundSessionStartedEvent(BaseEvent):

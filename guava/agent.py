@@ -149,7 +149,7 @@ class Agent:
         self._on_action_handlers: dict[str, Callable[[Call], None]] = {}
 
         self._on_session_end: Optional[Callable[[Call, BotSessionEnded], None] | Callable[[Call], None]] = None
-        self._on_outbound_failed: Optional[Callable[[OutboundCallFailed], None]] = None
+        self._on_outbound_failed: Optional[Callable[[Call, OutboundCallFailed], None] | Callable[[OutboundCallFailed], None]] = None
 
         self._on_escalate: Optional[Callable[[Call, EscalateEvent], None] | Callable[[Call], None]] = None
         self._on_dtmf: Optional[Callable[[Call, DTMFPressedEvent], None]] = None
@@ -249,11 +249,17 @@ class Agent:
         return self._register("_on_session_end", fn)
 
     @overload
+    def on_outbound_failed(self, fn: Callable[[Call, OutboundCallFailed], None], /) -> Callable[[Call, OutboundCallFailed], None]: ...
+    @overload
     def on_outbound_failed(self, fn: Callable[[OutboundCallFailed], None], /) -> Callable[[OutboundCallFailed], None]: ...
     @overload
-    def on_outbound_failed(self) -> Callable[[Callable[[OutboundCallFailed], None]], Callable[[OutboundCallFailed], None]]: ...
+    def on_outbound_failed(self) -> Callable[[Callable[[Call, OutboundCallFailed], None]], Callable[[Call, OutboundCallFailed], None]]: ... # Intentionally set to only two-arg.
 
     def on_outbound_failed(self, fn=None):
+        """
+        Register a handler to be invoked when an outbound call fails.
+        The handler receives a Call object and an ``OutboundCallFailed`` event.
+        """
         return self._register("_on_outbound_failed", fn)
 
     def on_search_query(self, field_key: str) -> Callable[[Callable[[Call, str], tuple]], Callable[[Call, str], tuple]]:
@@ -528,7 +534,17 @@ class Agent:
             case OutboundCallFailed():
                 logger.error("Outbound call failed: %s", event.error_reason)
                 if self._on_outbound_failed is not None:
-                    self._invoke_handler(call, "on_outbound_failed", False, self._on_outbound_failed, event)
+                    # Pass Call if accepted; single-arg form is deprecated.
+                    if _accepts_positional_arg(self._on_outbound_failed, 1):
+                        self._invoke_handler(call, "on_outbound_failed", False, cast(Callable[[Call, OutboundCallFailed], None], self._on_outbound_failed), call, event)
+                    else:
+                        warnings.warn(
+                            "on_outbound_failed handler should accept (Call, OutboundCallFailed); "
+                            "the single-argument form is deprecated and will be removed in a future version.",
+                            DeprecationWarning,
+                            stacklevel=2,
+                        )
+                        self._invoke_handler(call, "on_outbound_failed", False, cast(Callable[[OutboundCallFailed], None], self._on_outbound_failed), event)
             case ErrorEvent():
                 logger.error("Received error from Guava server: %s", event.content)
             case WarningEvent():
