@@ -24,7 +24,7 @@ OutreachModality = Literal["sms"]
 
 Language = Literal["english", "spanish", "french", "german", "italian"]
 
-FieldTypes = Literal["text", "date", "integer", "multiple_choice", "calendar_slot", "digit_sequence", "cvv", "credit_card_number"]
+FieldTypes = Literal["text", "date", "datetime", "integer", "multiple_choice", "calendar_slot", "digit_sequence", "cvv", "credit_card_number"]
 ChoiceGeneratorFunction = Callable[[str], tuple[list[str], list[str]]]
 
 class Field(BaseModel):
@@ -63,8 +63,6 @@ class Field(BaseModel):
 
     @model_validator(mode="after")
     def validate_choices(self):
-        if self.field_type == 'datetime':
-            raise NotImplementedError("Datetime collection is not yet implemented.")
         if self.field_type == 'calendar_slot':
             logger.info("NOTE: For calendar_slot, choices / choice_generator must return ISO-8601 formatted datetimes: YYYY-MM-ddTHH:mm")
             if self.choices:

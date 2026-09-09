@@ -58,7 +58,9 @@ from .commands import (
     ChoiceResultCommand,
     ActionSuggestionCommand,
     ActionCandidate,
-    ExpertErrorCommand
+    ExpertErrorCommand,
+    SpeedPreset,
+    validate_speed_preset,
 )
 from guava.call_controller import CommandQueueEnd
 from guava.edge_wake import run_wakeword_loop, run_wake_loop, run_button_loop
@@ -119,13 +121,15 @@ class SuggestedAction(BaseModel):
 
 @telemetry_client.track_class()
 class Agent:
-    def __init__(self, name: Optional[str] = None, organization: Optional[str] = None, purpose: Optional[str] = None, voice: Optional[str] = None, pronunciations: Optional[dict[str, str]] = None, accept_dtmf=True):
+    def __init__(self, name: Optional[str] = None, organization: Optional[str] = None, purpose: Optional[str] = None, voice: Optional[str] = None, pronunciations: Optional[dict[str, str]] = None, accept_dtmf=True, speech_speed: Optional[SpeedPreset] = None):
         self._name: Optional[str] = name
         self._organization: Optional[str] = organization
         self._purpose: Optional[str] = purpose
         self._voice: Optional[str] = voice
         self._tts_replacements: Optional[dict[str, str]] = pronunciations or None
         self._accept_dtmf_for_numbers = accept_dtmf
+        validate_speed_preset(speech_speed)  # Validate the preset name early, at construction.
+        self._speech_speed: Optional[SpeedPreset] = speech_speed
 
         self._client = Client()
 
@@ -604,6 +608,7 @@ class Agent:
             organization_name=self._organization,
             voice=self._voice,
             pronunciations=self._tts_replacements,
+            speech_speed=self._speech_speed,
         )
         call.send_command(
             RegisteredHooksCommand(

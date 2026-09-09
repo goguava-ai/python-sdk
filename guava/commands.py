@@ -1,4 +1,4 @@
-from typing import Optional, Literal, Union, Annotated
+from typing import Optional, Literal, Union, Annotated, get_args
 from pydantic import BaseModel, Field, model_validator, JsonValue
 from .types import E164PhoneNumber, ActionItem, Language, DTMFDigit
 from typing_extensions import deprecated
@@ -74,12 +74,31 @@ class ActionSuggestionCommand(BaseModel):
             self.actions = [ActionCandidate(key=self.action_key, description=self.action_description)]
         return self
 
+
+SpeedPreset = Literal["x-slow", "slow", "medium", "fast", "x-fast"]
+
+
+def validate_speed_preset(speed: Optional[SpeedPreset]) -> None:
+    """Validate a speed preset name, raising early on a typo.
+
+    Args:
+        speed: A preset name, or None to leave the current speed unchanged.
+
+    Raises:
+        ValueError: If speed is not a recognized preset name.
+    """
+    if speed is not None and speed not in get_args(SpeedPreset):
+        raise ValueError(
+            f"speed must be one of {list(get_args(SpeedPreset))} (got {speed!r})"
+        )
+
 class SetPersona(BaseModel):
     command_type: Literal["set-persona"] = "set-persona"
     agent_name: Optional[str] = None
     organization_name: Optional[str] = None
     agent_purpose: Optional[str] = None
     voice: Optional[str] = None
+    tts_speed: Optional[SpeedPreset] = None
     tts_replacements: Optional[dict[str, str]] = None
 
     @model_validator(mode="after")

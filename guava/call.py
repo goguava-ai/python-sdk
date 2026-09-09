@@ -15,6 +15,7 @@ from .commands import (
     ReadScriptCommand,
     SetAgentDTMFCommand,
     SendAgentDTMFCommand,
+    SpeedPreset,
 )
 from . import types
 from .types import Field, Say, DTMFDigit
@@ -132,7 +133,8 @@ class Call:
             agent_name: Optional[str] = None,
             agent_purpose: Optional[str] = None,
             voice: Optional[str] = None,
-            pronunciations: Optional[dict[str, str]] = None
+            pronunciations: Optional[dict[str, str]] = None,
+            speech_speed: Optional[SpeedPreset] = None
     ):
         self.send_command(
             SetPersona(
@@ -140,7 +142,8 @@ class Call:
                 agent_name=agent_name,
                 agent_purpose=agent_purpose,
                 voice=voice,
-                tts_replacements=pronunciations
+                tts_replacements=pronunciations,
+                tts_speed=speech_speed
             )
         )
 
