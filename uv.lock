@@ -940,9 +940,10 @@ wheels = [
 
 [[package]]
 name = "guava-sdk"
-version = "0.43.0"
+version = "0.44.0"
 source = { editable = "." }
 dependencies = [
+    { name = "certifi" },
     { name = "httpx" },
     { name = "pydantic" },
     { name = "typing-extensions" },
@@ -997,6 +998,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "certifi", specifier = ">=2024.2.2" },
     { name = "chromadb", marker = "extra == 'chromadb'", specifier = ">=0.6.0" },
     { name = "google-genai", marker = "extra == 'genai'", specifier = ">=1.55.0" },
     { name = "httpx", specifier = ">=0.27.0" },

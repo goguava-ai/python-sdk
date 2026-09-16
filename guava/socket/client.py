@@ -1,8 +1,10 @@
 import secrets
+import ssl
 import time
 import logging
 import random
 
+import certifi
 from websockets.exceptions import ConnectionClosed, InvalidStatus
 from pydantic import TypeAdapter
 from typing import Generic, TypeVar, Literal, Tuple, Callable, Union, TYPE_CHECKING
@@ -14,6 +16,7 @@ from .protocol import GuavaOpen, GuavaOpenAck, GuavaMessage, GuavaClose, GuavaPi
 from threading import Lock, Thread, Event
 from queue import Queue, Empty
 from guava.telemetry import telemetry_client
+from guava.threading_utils import LazySingleton
 from .utils import EventCounter
 
 class GuavaSocketClosedError(Exception):
@@ -31,6 +34,10 @@ class GuavaSocketConnectionFailed(Exception):
 
 SendT = TypeVar("SendT")
 RecvT = TypeVar("RecvT")
+
+
+# Cache a single SSL context built from certifi's CA bundle.
+_ssl_context = LazySingleton(lambda: ssl.create_default_context(cafile=certifi.where()))
 
 @telemetry_client.track_class()
 class GuavaSocket(Generic[SendT, RecvT]):
@@ -142,7 +149,9 @@ class GuavaSocket(Generic[SendT, RecvT]):
             num_attempts += 1
             
             try:
-                websocket = ws_connect(self._connection_url, additional_headers=self._client._get_headers(), open_timeout=10, close_timeout=10)
+                # Only pass an SSL context for wss:// URLs
+                ssl_context = _ssl_context.get() if self._connection_url.startswith("wss://") else None
+                websocket = ws_connect(self._connection_url, additional_headers=self._client._get_headers(), open_timeout=10, close_timeout=10, ssl=ssl_context)
                 websocket.send(
                     GuavaOpen(
                         name=self._name,

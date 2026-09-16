@@ -1,10 +1,11 @@
 [project]
 name = "guava-sdk"
-version = "0.43.0"
+version = "0.44.0"
 description = "The official Python SDK for building Guava voice agents."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
+    "certifi>=2024.2.2",
     "httpx>=0.27.0",
     "pydantic>=2.12.4",
     "typing-extensions>=4.15.0",

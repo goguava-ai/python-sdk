@@ -21,7 +21,7 @@ from guava.types.incoming_call_action import IncomingCallAction, AcceptCall, Dec
 from guava import Client
 from guava.utils import check_exactly_one
 from urllib.parse import urlencode
-from guava.socket.client import GuavaSocket, GuavaSocketClosedError
+from guava.socket.client import GuavaSocket, GuavaSocketClosedError, _ssl_context
 from . import listen_inbound
 from guava.call import Call
 from .utils import check_response, is_jsonable, preview
@@ -1220,11 +1220,15 @@ Choose "speak" and provide your next utterance, or choose "hangup" if the conver
 
         call_thread = None
         try:
+            test_agent_url = self._client.get_websocket_url("v1/test-agent")
+            # Only pass an SSL context for wss:// URLs
+            ssl_context = _ssl_context.get() if test_agent_url.startswith("wss://") else None
             with ws_connect(
-                self._client.get_websocket_url("v1/test-agent"),
+                test_agent_url,
                 additional_headers=self._client._get_headers(),
                 open_timeout=10,
                 close_timeout=10,
+                ssl=ssl_context,
             ) as ws:
                 session_started = SessionStarted.model_validate_json(ws.recv())
 
