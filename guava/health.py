@@ -3,9 +3,11 @@ import os
 import contextlib
 
 from typing import Literal
+from typing_extensions import Self
 from http.server import BaseHTTPRequestHandler
 from http.server import ThreadingHTTPServer
-from threading import Thread
+
+from .threading_utils import create_daemon_thread
 
 logger = logging.getLogger("guava.health")
 
@@ -61,7 +63,7 @@ class HealthServer:
         self._server = None
         self._thread = None
 
-    def __enter__(self):
+    def __enter__(self) -> Self:
         health_ctx = self._health_ctx
 
         class RequestHandler(BaseHTTPRequestHandler):
@@ -82,10 +84,7 @@ class HealthServer:
             (self._host, self._port),
             RequestHandler,
         )
-        self._thread = Thread(
-            target=self._server.serve_forever,
-            daemon=True,
-        )
+        self._thread = create_daemon_thread(self._server.serve_forever)
         self._thread.start()
         logger.info("Health check server listening on http://%s:%d/live", self._host, self._port)
 
@@ -100,7 +99,7 @@ class HealthServer:
         self._server.server_close()
         self._thread.join()
 
-def get_health_server(health_ctx: HealthContext | MultiHealthContext) -> contextlib.AbstractContextManager[None]:
+def get_health_server(health_ctx: HealthContext | MultiHealthContext) -> contextlib.AbstractContextManager[HealthServer | None]:
     if os.getenv("GUAVA_HEALTH_SERVER", "false").lower().strip() in ['yes', 'true', 'on']:
         return HealthServer(health_ctx)
     else:

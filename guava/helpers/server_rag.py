@@ -26,9 +26,7 @@ def _prefixed_key(namespace: str | None, key: str) -> str:
 class ServerRAG:
     """RAG via the Guava server API.
 
-    Uploads documents as plain text to the server, which stores them in GCS and
-    answers questions using Gemini. No local GCP credentials or vector store setup
-    required.
+    Uploads documents as plain text to the server.
 
     Handles content-addressed keys, namespace scoping, and reconciliation
     (skip unchanged docs, delete stale docs across runs).

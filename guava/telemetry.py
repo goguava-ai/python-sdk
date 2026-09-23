@@ -11,6 +11,7 @@ import logging
 from typing import Tuple
 from enum import Enum
 from .utils import NoOpLogger, check_response
+from .threading_utils import create_daemon_thread
 
 if os.getenv("GUAVA_DEBUG_TELEMETRY", "false").lower().strip() in ['yes', 'true', 'on']:
     logger = logging.getLogger("guava.telemetry")
@@ -86,7 +87,7 @@ class TelemetryClient(BaseTelemetryClient):
         super().__init__()
 
         self._event_queue: queue.Queue[Tuple[int, TelemetryEvent, dict]] = queue.Queue(maxsize=TelemetryClient.QUEUE_MAX_SIZE)
-        self._upload_thread = threading.Thread(target=self._upload_events, daemon=True)
+        self._upload_thread = create_daemon_thread(self._upload_events)
         self._shutdown_event = threading.Event()
         self._upload_thread.start()
         

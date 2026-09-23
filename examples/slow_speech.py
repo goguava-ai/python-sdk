@@ -8,8 +8,8 @@ from guava.examples import get_agent_number
 
 logger = logging.getLogger("slow_speech")
 
-# `speech_speed` sets the TTS playback rate (time-stretch, pitch preserved) via a
-# named preset: "x-slow", "slow", "medium" (normal), "fast", or "x-fast".
+# `speech_speed` sets how quickly the agent speaks via a named preset:
+# "x-slow", "slow", "medium" (normal), "fast", or "x-fast".
 # Here we run the agent at the "slow" preset so speech is easier to follow.
 agent = Agent(
     name="Nova",

@@ -1,7 +1,25 @@
 import threading
-from typing import Callable, Generic, TypeVar
+from typing import Any, Callable, Generic, ParamSpec, TypeVar
 
 T = TypeVar("T")
+P = ParamSpec("P")
+
+
+def create_daemon_thread(target: Callable[P, Any], *args: P.args, **kwargs: P.kwargs) -> threading.Thread:
+    """Create an unstarted daemon thread that runs target(*args, **kwargs).
+
+    Unlike ``threading.Thread(target=..., args=...)``, the arguments are
+    typechecked against the target's signature.
+
+    Args:
+        target: The callable to run on the thread.
+        *args: Positional arguments to pass to the target.
+        **kwargs: Keyword arguments to pass to the target.
+
+    Returns:
+        The unstarted thread.
+    """
+    return threading.Thread(target=target, args=args, kwargs=kwargs, daemon=True)  # nosemgrep: python-no-threading-thread
 
 
 class LazySingleton(Generic[T]):

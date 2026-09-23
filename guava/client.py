@@ -25,7 +25,7 @@ from urllib.parse import urljoin, urlencode
 from .call_controller import CallController, CommandQueueEnd  # ty: ignore[deprecated]
 
 from importlib.metadata import version, PackageNotFoundError
-from .threading_utils import FirstEntry
+from .threading_utils import FirstEntry, create_daemon_thread
 
 from guava.socket.client import GuavaSocket, GuavaSocketClosedError
 from . import listen_inbound, guavadialer_events
@@ -208,7 +208,7 @@ class Client:
                         gs.send(command)
                         
                 # On a background thread, drain commands to the websocket.
-                command_thread = threading.Thread(target=drain_commands, daemon=True)
+                command_thread = create_daemon_thread(drain_commands)
                 command_thread.start()
 
                 # Receive and dispatch events on the main thread.
@@ -224,7 +224,7 @@ class Client:
                     else:
                         # Run event on it's own thread, to allow for awaiting. This could be made a threadpool, but you could
                         # still exhaust the pool with a bunch of await tasks, and thus deadlock a controller.
-                        threading.Thread(target=call_controller.on_event, args=(event,), daemon=True).start()
+                        create_daemon_thread(call_controller.on_event, event).start()
 
                     if isinstance(event, OutboundCallFailed) or isinstance(event, BotSessionEnded):
                         # These events are considered terminal, and should signal the call controller to shutdown.
@@ -287,11 +287,11 @@ class Client:
                             if call_controller:
                                 logger.info("Answering call...")
                                 gs.send(listen_inbound.AnswerCall(call_id=server_message.call_id))
-                                threading.Thread(target=self._attach_to_call, args=(server_message.call_id, call_controller), daemon=True).start()
+                                create_daemon_thread(self._attach_to_call, server_message.call_id, call_controller).start()
 
                                 # Still invoke this callback even though it is considered deprecated. It can no longer be used to decline incoming calls.
                                 event = InboundCallEvent(caller_number=server_message.call_info.from_number if isinstance(server_message.call_info, PSTNCallInfo) else None)
-                                threading.Thread(target=call_controller.on_event, args=(event,), daemon=True).start()
+                                create_daemon_thread(call_controller.on_event, event).start()
                             else:
                                 logger.info("Call controller factory returned None... Declining call...")
                                 gs.send(listen_inbound.DeclineCall(call_id=server_message.call_id))
@@ -316,7 +316,7 @@ class Client:
                 nonlocal call_controller
                 call_controller = controller(data=data)
 
-            init_thread = threading.Thread(target=init_controller, daemon=True)
+            init_thread = create_daemon_thread(init_controller)
             init_thread.start()
             init_thread.join(timeout=init_timeout)
             if init_thread.is_alive() or call_controller is None:
@@ -343,13 +343,13 @@ class Client:
                         while call_gs.is_open():
                             event = call_gs.recv()
                             if event:
-                                threading.Thread(target=call_controller.on_event, args=(event,), daemon=True).start()
+                                create_daemon_thread(call_controller.on_event, event).start()
                                 if isinstance(event, BotSessionEnded):
                                     call_controller.shutdown()
                     except GuavaSocketClosedError:
                         pass
 
-                listen_events_thread = threading.Thread(target=listen_for_events, daemon=True)
+                listen_events_thread = create_daemon_thread(listen_for_events)
                 listen_events_thread.start()
 
                 while call_gs.is_open():
@@ -404,7 +404,7 @@ class Client:
                         except Exception:
                             logger.debug("Failed to poll campaign status, will retry.", exc_info=True)
 
-                threading.Thread(target=poll_campaign_completion, daemon=True).start()
+                create_daemon_thread(poll_campaign_completion).start()
 
                 while gs.is_open():
                     try:
@@ -416,11 +416,7 @@ class Client:
                                 # Only used in controller mode. In headless mode the server handles calls directly.
                                 log_phone = server_message.contact_data.get('phone_number') if server_message.contact_data else '?'
                                 logger.info("Ready to make call, id %s — running precall for contact %s.", server_message.call_id, log_phone)
-                                t = threading.Thread(
-                                    target=initiate_call_controller,
-                                    args=(server_message.call_id, server_message.contact_data),
-                                    daemon=True,
-                                )
+                                t = create_daemon_thread(initiate_call_controller, server_message.call_id, server_message.contact_data)
                                 active_call_threads.append(t)
                                 t.start()
                     except KeyboardInterrupt:

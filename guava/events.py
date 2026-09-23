@@ -110,7 +110,9 @@ class OutboundCallFailed(BaseEvent):
 class BotSessionEnded(BaseEvent):
     event_type: Literal["bot-session-ended"] = "bot-session-ended"
     termination_reason: TerminationReason
+    # Outbound calls
     dnc: bool = False
+    pickup: bool = True
 
 class ChoiceQueryEvent(BaseEvent):
     event_type: Literal["choice-query"] = "choice-query"
@@ -126,6 +128,15 @@ class DTMFPressedEvent(BaseEvent):
     event_type: Literal['dtmf'] = 'dtmf'
     digit: DTMFDigit
     recent_digits: str = ''
+
+class AgentDTMFSentEvent(BaseEvent):
+    """
+    The agent pressed DTMF digits, either on its own after `call.set_agent_dtmf(enabled=True)`
+    or because the developer called `call.send_dtmf(...)`; `requested_by` says which.
+    """
+    event_type: Literal['agent-dtmf'] = 'agent-dtmf'
+    digits: list[DTMFDigit]
+    requested_by: Literal['agent', 'developer'] = 'agent'
 
 Event = Annotated[
     Union[
@@ -147,6 +158,7 @@ Event = Annotated[
         ChoiceQueryEvent,
         EscalateEvent,
         DTMFPressedEvent,
+        AgentDTMFSentEvent,
     ],
     Field(discriminator="event_type"),
 ]

@@ -49,6 +49,7 @@ from .events import (
     OutboundCallConnected,
     EscalateEvent,
     DTMFPressedEvent,
+    AgentDTMFSentEvent,
     decode_event_dict,
 )
 from .commands import (
@@ -65,6 +66,7 @@ from .commands import (
 from guava.call_controller import CommandQueueEnd
 from guava.edge_wake import run_wakeword_loop, run_wake_loop, run_button_loop
 from .health import HealthContext, get_health_server
+from .threading_utils import create_daemon_thread
 
 logger = logging.getLogger("guava.agent")
 
@@ -156,7 +158,8 @@ class Agent:
         self._on_outbound_failed: Optional[Callable[[Call, OutboundCallFailed], None] | Callable[[OutboundCallFailed], None]] = None
 
         self._on_escalate: Optional[Callable[[Call, EscalateEvent], None] | Callable[[Call], None]] = None
-        self._on_dtmf: Optional[Callable[[Call, DTMFPressedEvent], None]] = None
+        self._on_caller_dtmf: Optional[Callable[[Call, DTMFPressedEvent], None]] = None
+        self._on_agent_dtmf: Optional[Callable[[Call, AgentDTMFSentEvent], None]] = None
 
         self._edge_callbacks: dict[str, Callable[[Call], None]] = {}  # "press_enter" | "wakeword" | "wake"
         self._edge_wake_trigger: Optional[Callable[[], None]] = None
@@ -364,12 +367,29 @@ class Agent:
         return self._register("_on_escalate", fn)
 
     @overload
+    def on_caller_dtmf(self, fn: Callable[[Call, DTMFPressedEvent], None], /) -> Callable[[Call, DTMFPressedEvent], None]: ...
+    @overload
+    def on_caller_dtmf(self) -> Callable[[Callable[[Call, DTMFPressedEvent], None]], Callable[[Call, DTMFPressedEvent], None]]: ...
+
+    def on_caller_dtmf(self, fn=None):
+        return self._register("_on_caller_dtmf", fn)
+
+    @overload
     def on_dtmf(self, fn: Callable[[Call, DTMFPressedEvent], None], /) -> Callable[[Call, DTMFPressedEvent], None]: ...
     @overload
     def on_dtmf(self) -> Callable[[Callable[[Call, DTMFPressedEvent], None]], Callable[[Call, DTMFPressedEvent], None]]: ...
 
     def on_dtmf(self, fn=None):
-        return self._register("_on_dtmf", fn)
+        """Alias for `on_caller_dtmf`; starts emitting a DeprecationWarning in a future release."""
+        return self._register("_on_caller_dtmf", fn)
+
+    @overload
+    def on_agent_dtmf(self, fn: Callable[[Call, AgentDTMFSentEvent], None], /) -> Callable[[Call, AgentDTMFSentEvent], None]: ...
+    @overload
+    def on_agent_dtmf(self) -> Callable[[Callable[[Call, AgentDTMFSentEvent], None]], Callable[[Call, AgentDTMFSentEvent], None]]: ...
+
+    def on_agent_dtmf(self, fn=None):
+        return self._register("_on_agent_dtmf", fn)
 
     @edge_only
     def on_press_enter(self, fn=None):
@@ -577,8 +597,11 @@ class Agent:
                         logger.exception("An error occurred in the on_search_query('%s') handler.", event.field_key)
                         call.send_command(ExpertErrorCommand(message=f"The expert encountered an error while processing the on_search_query('{event.field_key}') handler. No results will be forthcoming."))
             case DTMFPressedEvent():
-                if self._on_dtmf is not None:
-                    self._invoke_handler(call, "on_dtmf", False, self._on_dtmf, call, event)
+                if self._on_caller_dtmf is not None:
+                    self._invoke_handler(call, "on_caller_dtmf", False, self._on_caller_dtmf, call, event)
+            case AgentDTMFSentEvent():
+                if self._on_agent_dtmf is not None:
+                    self._invoke_handler(call, "on_agent_dtmf", False, self._on_agent_dtmf, call, event)
             case EscalateEvent():
                 if self._on_escalate is not None:
                     # Inform the agent on escalation error.
@@ -616,7 +639,8 @@ class Agent:
                 has_on_intent=False,
                 has_on_action_requested=self._on_action_requested is not None,
                 has_on_escalate=self._on_escalate is not None,
-                accept_dtmf_for_numbers=self._accept_dtmf_for_numbers
+                accept_dtmf_for_numbers=self._accept_dtmf_for_numbers,
+                has_on_agent_dtmf=self._on_agent_dtmf is not None,
             )
         )
 
@@ -665,7 +689,7 @@ class Agent:
                         gs.send(command)
                         
                 # On a background thread, drain commands to the websocket.
-                command_thread = threading.Thread(target=drain_commands, daemon=True)
+                command_thread = create_daemon_thread(drain_commands)
                 command_thread.start()
 
                 # Receive and dispatch events on the main thread.
@@ -708,11 +732,12 @@ class Agent:
 
     def call_local(self, variables: dict[str, Any] = {}) -> None:
         webrtc_code = self._client.create_webrtc_agent(ttl=timedelta(minutes=5))
-        threading.Thread(target=self._listen_inbound, kwargs={
-            "health_ctx": HealthContext(), # No health-server for call_local.
-            "webrtc_code": webrtc_code,
-            "initial_variables": variables,
-        }, daemon=True).start()
+        create_daemon_thread(
+            self._listen_inbound,
+            HealthContext(), # No health-server for call_local.
+            webrtc_code=webrtc_code,
+            initial_variables=variables,
+        ).start()
         run_webrtc_helper(webrtc_code, self._client._base_url)
 
     @preview("Agent Audio Testing")
@@ -731,11 +756,12 @@ class Agent:
             raise FileNotFoundError(f"input_wav not found: {input_wav}")
 
         webrtc_code = self._client.create_webrtc_agent(ttl=timedelta(minutes=5))
-        threading.Thread(target=self._listen_inbound, kwargs={
-            "health_ctx": HealthContext(), # No health-server for test_audio.
-            "webrtc_code": webrtc_code,
-            "initial_variables": variables,
-        }, daemon=True).start()
+        create_daemon_thread(
+            self._listen_inbound,
+            HealthContext(), # No health-server for test_audio.
+            webrtc_code=webrtc_code,
+            initial_variables=variables,
+        ).start()
         run_webrtc_helper(webrtc_code, self._client._base_url, input_wav=str(input_wav), output_wav=str(output_wav))
 
     @edge_only
@@ -769,17 +795,17 @@ class Agent:
                     logger.exception("Listener crashed, reconnecting in 5 s…")
                     time.sleep(5)
 
-        threading.Thread(target=_listen_inbound_safe, daemon=True).start()
+        create_daemon_thread(_listen_inbound_safe).start()
 
         trigger_url = self._client.get_http_url("api/trigger-local-call")
 
         if has_wakeword:
-            threading.Thread(target=run_wakeword_loop, args=(self, trigger_url), daemon=True).start()
+            create_daemon_thread(run_wakeword_loop, self, trigger_url).start()
             logger.debug("Wakeword detection active.")
 
         if has_wake:
             assert self._edge_wake_trigger is not None
-            threading.Thread(target=run_wake_loop, args=(self, trigger_url, self._edge_wake_trigger), daemon=True).start()
+            create_daemon_thread(run_wake_loop, self, trigger_url, self._edge_wake_trigger).start()
             logger.debug("Custom wake trigger active.")
 
         if has_button:
@@ -844,7 +870,7 @@ class Agent:
                                     logger.info("Accepting call...")
                                     gs.send(listen_inbound.AnswerCall(call_id=server_message.call_id))
 
-                                    t = threading.Thread(target=self._attach_to_call, args=(server_message.call_id, server_message.call_info, initial_variables), daemon=True)
+                                    t = create_daemon_thread(self._attach_to_call, server_message.call_id, server_message.call_info, initial_variables)
                                     active_calls.append(t) # TODO: Possible memory leak
                                     t.start()
                                 else:
@@ -923,11 +949,7 @@ class Agent:
                             # Only used in controller mode. In headless mode the server handles calls directly.
                             log_phone = server_message.contact_data.get('phone_number') if server_message.contact_data else '?'
                             logger.info("Ready to make call, id %s — initiating call setup and dispatch for contact %s.", server_message.call_id, log_phone)
-                            t = threading.Thread(
-                                target=initiate_call,
-                                args=(server_message.call_id, server_message.contact_data),
-                                daemon=True,
-                            )
+                            t = create_daemon_thread(initiate_call, server_message.call_id, server_message.contact_data)
                             active_call_threads.append(t) # TODO: Possible memory leak
                             t.start()
         except GuavaSocketClosedError:
@@ -1083,7 +1105,7 @@ Choose "speak" and provide your next utterance, or choose "hangup" if the conver
                     root_logger.removeHandler(h)
                 root_logger.addHandler(tui_handler)
 
-                reader_thread = threading.Thread(target=_reader, daemon=True)
+                reader_thread = create_daemon_thread(_reader)
                 reader_thread.start()
 
                 input_buf = ""  # characters typed by the user since last Enter
@@ -1233,11 +1255,12 @@ Choose "speak" and provide your next utterance, or choose "hangup" if the conver
                 session_started = SessionStarted.model_validate_json(ws.recv())
 
                 test_session = TestSession(ws, session_started.session_id)
-                call_thread = threading.Thread(
-                    target=self._attach_to_call,
-                    args=(session_started.session_id, PSTNCallInfo(from_number=None, to_number="+15555555555")),
-                    kwargs={"initial_variables": variables or {}, "test_session": test_session},
-                    daemon=True,
+                call_thread = create_daemon_thread(
+                    self._attach_to_call,
+                    session_started.session_id,
+                    PSTNCallInfo(from_number=None, to_number="+15555555555"),
+                    initial_variables=variables or {},
+                    test_session=test_session,
                 )
                 call_thread.start()
 

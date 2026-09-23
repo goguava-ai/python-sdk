@@ -119,6 +119,7 @@ class RegisteredHooksCommand(BaseModel):
     has_on_action_requested: bool = False
     has_on_escalate: bool = False
     accept_dtmf_for_numbers: bool = True
+    has_on_agent_dtmf: bool = False
 
 class SendInstructionCommand(BaseModel):
     command_type: Literal["send-instruction"] = "send-instruction"

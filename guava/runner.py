@@ -3,8 +3,12 @@ import logging
 import signal
 import threading
 from .health import MultiHealthContext, get_health_server
+from .threading_utils import create_daemon_thread
 from datetime import timedelta
+from typing import Any, Callable, ParamSpec
 from guava.agent import Agent
+
+P = ParamSpec("P")
 
 logger = logging.getLogger("guava.runner")
 
@@ -16,21 +20,21 @@ class Runner:
         # drain in-flight ones.
         self._drain = threading.Event()
 
-    def _add(self, target, args=(), kwargs={}):
-        self._threads.append(threading.Thread(target=target, args=args, kwargs=kwargs, daemon=True))
+    def _add(self, target: Callable[P, Any], *args: P.args, **kwargs: P.kwargs):
+        self._threads.append(create_daemon_thread(target, *args, **kwargs))
 
     def listen_phone(self, agent: "Agent", agent_number: str) -> "Runner":
-        self._add(agent._listen_inbound, kwargs={"health_ctx": self._health_ctx.create_ctx(), "agent_number": agent_number, "drain": self._drain})
+        self._add(agent._listen_inbound, self._health_ctx.create_ctx(), agent_number=agent_number, drain=self._drain)
         return self
 
     def listen_webrtc(self, agent: "Agent", webrtc_code: str | None = None) -> "Runner":
         if not webrtc_code:
             webrtc_code = agent._client.create_webrtc_agent(ttl=timedelta(hours=1))
-        self._add(agent._listen_inbound, kwargs={"health_ctx": self._health_ctx.create_ctx(), "webrtc_code": webrtc_code, "drain": self._drain})
+        self._add(agent._listen_inbound, self._health_ctx.create_ctx(), webrtc_code=webrtc_code, drain=self._drain)
         return self
 
     def listen_sip(self, agent: "Agent", sip_code: str) -> "Runner":
-        self._add(agent._listen_inbound, kwargs={"health_ctx": self._health_ctx.create_ctx(), "sip_code": sip_code, "drain": self._drain})
+        self._add(agent._listen_inbound, self._health_ctx.create_ctx(), sip_code=sip_code, drain=self._drain)
         return self
 
     def listen_for_wake(self, agent: "Agent") -> "Runner":
@@ -38,7 +42,7 @@ class Runner:
         return self
 
     def attach_campaign(self, agent: "Agent", campaign_code: str) -> "Runner":
-        self._add(agent._serve_campaign, kwargs={"health_ctx": self._health_ctx.create_ctx(), "campaign_code": campaign_code, "drain": self._drain})
+        self._add(agent._serve_campaign, self._health_ctx.create_ctx(), campaign_code=campaign_code, drain=self._drain)
         return self
 
     @contextlib.contextmanager

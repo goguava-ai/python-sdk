@@ -8,6 +8,7 @@ import certifi
 from websockets.exceptions import ConnectionClosed, InvalidStatus
 from pydantic import TypeAdapter
 from typing import Generic, TypeVar, Literal, Tuple, Callable, Union, TYPE_CHECKING
+from typing_extensions import Self
 
 if TYPE_CHECKING:
     from guava.client import Client
@@ -16,7 +17,7 @@ from .protocol import GuavaOpen, GuavaOpenAck, GuavaMessage, GuavaClose, GuavaPi
 from threading import Lock, Thread, Event
 from queue import Queue, Empty
 from guava.telemetry import telemetry_client
-from guava.threading_utils import LazySingleton
+from guava.threading_utils import LazySingleton, create_daemon_thread
 from .utils import EventCounter
 
 class GuavaSocketClosedError(Exception):
@@ -294,7 +295,7 @@ class GuavaSocket(Generic[SendT, RecvT]):
         assert self._reconnect_thread is None
         self._logger.debug("Starting websocket reconnection thread...")
 
-        self._reconnect_thread = Thread(target=self._reconnect_loop, daemon=True)
+        self._reconnect_thread = create_daemon_thread(self._reconnect_loop)
         self._reconnect_thread.start()
         
         # Return once the websocket is ready for the first time.
@@ -373,7 +374,7 @@ class GuavaSocket(Generic[SendT, RecvT]):
             except Empty:
                 continue
 
-    def __enter__(self):
+    def __enter__(self) -> Self:
         self.connect()
         return self
 
