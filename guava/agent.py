@@ -4,6 +4,7 @@ from copy import copy
 from datetime import timedelta
 import inspect
 import logging
+import sys
 import threading
 import time
 import warnings
@@ -649,6 +650,7 @@ class Agent:
 
         trigger = self._edge_trigger
         self._edge_trigger = None
+        call._edge_trigger = trigger
 
         edge_cb = self._edge_callbacks.get(trigger) if trigger else None
         if edge_cb is not None:
@@ -658,18 +660,16 @@ class Agent:
 
         return call
 
-    def _attach_to_call(self, call_id: str, call_info: CallInfo, initial_variables: dict = {}, route="v2/connect-call", test_session: Optional[TestSession] = None):
+    def _attach_to_call(self, call_id: str, call: Call, route="v2/connect-call", test_session: Optional[TestSession] = None):
         """Attach a call controller to a given call ID."""
-        is_edge = self._edge_trigger is not None
+        # Read off the call, since _init_call has already consumed the agent's trigger.
+        is_edge = call._edge_trigger is not None
         if is_edge:
             self._edge_idle.clear()
 
-        call = None
         command_thread = None
 
         try:
-            call = self._init_call(call_id, call_info, initial_variables)
-
             with GuavaSocket[Command, Event | None](
                     f"call-connection-{call_id}",
                     self._client.get_websocket_url(f"{route}/{call_id}"),
@@ -704,8 +704,8 @@ class Agent:
                     if isinstance(event, (BotSessionEnded, OutboundCallFailed)):
                         break
         finally:
-            if call:
-                call._shutdown_queue()
+            call._shutdown_queue()
+
             if command_thread:
                 command_thread.join()
             if is_edge:
@@ -808,11 +808,15 @@ class Agent:
             create_daemon_thread(run_wake_loop, self, trigger_url, self._edge_wake_trigger).start()
             logger.debug("Custom wake trigger active.")
 
-        if has_button:
-            run_button_loop(self, trigger_url, has_wakeword=has_wakeword)
-        else:
-            logger.debug("Listening locally (no Enter key trigger).")
-            threading.Event().wait()
+        try:
+            if has_button:
+                run_button_loop(self, trigger_url, has_wakeword=has_wakeword)
+            else:
+                logger.debug("Listening locally (no Enter key trigger).")
+                threading.Event().wait()
+        except KeyboardInterrupt:
+            # Ctrl-C is how local mode is stopped; exit without a traceback.
+            sys.exit(130)
 
     def _listen_inbound(self, health_ctx: HealthContext, agent_number: str | None = None, webrtc_code: str | None = None, sip_code: str | None = None, initial_variables: dict[str, Any] = {}, drain: threading.Event | None = None):
         if not check_exactly_one(agent_number, webrtc_code, sip_code):
@@ -868,11 +872,21 @@ class Agent:
                                     gs.send(listen_inbound.DeclineCall(call_id=server_message.call_id))
                                 elif isinstance(call_action, AcceptCall):
                                     logger.info("Accepting call...")
-                                    gs.send(listen_inbound.AnswerCall(call_id=server_message.call_id))
 
-                                    t = create_daemon_thread(self._attach_to_call, server_message.call_id, server_message.call_info, initial_variables)
-                                    active_calls.append(t) # TODO: Possible memory leak
-                                    t.start()
+                                    # Initialize the call, invoking on_call_start
+                                    try:
+                                        call = self._init_call(server_message.call_id, server_message.call_info, initial_variables)
+                                    except Exception:
+                                        logger.exception("Failed to initialize inbound call. Rejecting...")
+
+                                        # Since the call initialization failed, we have to decline the call.
+                                        gs.send(listen_inbound.DeclineCall(call_id=server_message.call_id))
+                                    else:
+                                        gs.send(listen_inbound.AnswerCall(call_id=server_message.call_id))
+
+                                        t = create_daemon_thread(self._attach_to_call, server_message.call_id, call)
+                                        active_calls.append(t) # TODO: Possible memory leak
+                                        t.start()
                                 else:
                                     logger.error("Unknown action for incoming call: %r", call_action)
                             except Exception:
@@ -901,8 +915,16 @@ class Agent:
             }
         ))
         call_id = response.json()["call_id"]
+
+        # Initialize the call, invoking on_call_start
+        try:
+            call = self._init_call(call_id, PSTNCallInfo(from_number=from_number, to_number=to_number), variables)
+        except Exception:
+            logger.exception("Failed to initialize outbound call.")
+            raise
+        
         logger.info("Outbound call created with session ID: %s", call_id)
-        self._attach_to_call(call_id, PSTNCallInfo(from_number=from_number, to_number=to_number), variables)
+        self._attach_to_call(call_id, call)
 
     def _serve_campaign(
         self,
@@ -917,8 +939,17 @@ class Agent:
             call_info = PSTNCallInfo(from_number=None, to_number=contact_data.get('phone_number'))
             data = contact_data.get('data', {})
 
+            # Initialize the call, invoking on_call_start
+            try:
+                call = self._init_call(call_id, call_info, data)
+            except Exception:
+                logger.exception("Failed to initialize campaign call. The call will not be dialed.")
+                gs.send(guavadialer_events.InitControllerFailed(call_id=call_id))
+                return
+
+            # Signal that we're ready for this call do go out, and attach to the endpoint.
             gs.send(guavadialer_events.ControllerReady(call_id=call_id))
-            self._attach_to_call(call_id, call_info, initial_variables=data, route="v2/connect-campaign-call")
+            self._attach_to_call(call_id, call=call, route="v2/connect-campaign-call")
 
         # Calls we've handed off to background threads, so we can wait for them
         # to finish while draining.
@@ -1255,11 +1286,17 @@ Choose "speak" and provide your next utterance, or choose "hangup" if the conver
                 session_started = SessionStarted.model_validate_json(ws.recv())
 
                 test_session = TestSession(ws, session_started.session_id)
+
+                # Initialize the call, invoking on_call_start
+                call = self._init_call(
+                    session_started.session_id,
+                    PSTNCallInfo(from_number=None, to_number="+15555555555"),
+                    variables or {},
+                )
                 call_thread = create_daemon_thread(
                     self._attach_to_call,
                     session_started.session_id,
-                    PSTNCallInfo(from_number=None, to_number="+15555555555"),
-                    initial_variables=variables or {},
+                    call,
                     test_session=test_session,
                 )
                 call_thread.start()

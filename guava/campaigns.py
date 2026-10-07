@@ -42,6 +42,16 @@ class UploadContactsResult(BaseModel):
     created: int
 
 
+class DeleteContactsResult(BaseModel):
+    """Result of deleting contacts from a campaign.
+
+    Attributes:
+        deleted: The number of contacts that were removed.
+    """
+
+    deleted: int
+
+
 @telemetry_client.track_class()
 class Campaign:
     def __init__(self, client: Client, id: str, code: str, name: str):
@@ -88,6 +98,30 @@ class Campaign:
         )
 
         return UploadContactsResult.model_validate(response.json())
+
+    def delete_contacts(self, phone_number: str) -> DeleteContactsResult:
+        """Permanently remove every contact in this campaign with the given phone number.
+
+        Args:
+            phone_number: The contact's number. US numbers only, with or without
+                the ``+1`` (e.g. ``"2125551234"`` or ``"(212) 555-1234"``); it is
+                normalized to E.164 before matching.
+
+        Returns:
+            The number of contacts removed. This can be more than 1 if the number
+            was uploaded more than once with ``allow_duplicates``.
+
+        Raises:
+            httpx.HTTPStatusError: If no contact matches, or one is currently mid-call.
+        """
+        response = check_response(
+            httpx.delete(
+                self._client.get_http_url(f"v2/campaigns/{self._code}/contacts"),
+                params={"phone_number": phone_number},
+                headers=self._client._get_headers(),
+            )
+        )
+        return DeleteContactsResult.model_validate(response.json())
 
     def get_status(self) -> CampaignStatus:
         response = httpx.get(

@@ -80,11 +80,33 @@ def _fire_trigger(
 AUDIO_STALL_TIMEOUT = 10
 
 
+def _has_microphone() -> bool:
+    """Whether PortAudio has a default input device. A fresh PyAudio instance
+    is needed each time, since PortAudio only enumerates devices on init
+    (the loop re-checks after each call, in case the mic was unplugged)."""
+    import pyaudio
+
+    pa = pyaudio.PyAudio()
+    try:
+        pa.get_default_input_device_info()
+        return True
+    except OSError:
+        return False
+    finally:
+        pa.terminate()
+
+
 def run_wakeword_loop(agent: Agent, trigger_url: str) -> None:
     interp = agent._wakeword_interpreter
 
     while True:
         agent._edge_idle.wait()
+        # Without this, nanowakeword's listener thread dies opening the stream
+        # and the stall watchdog below restarts it forever. guava-edge shuts
+        # down on a missing microphone too, so there's nothing to wait for.
+        if not _has_microphone():
+            logger.error("No microphone found; wakeword detection stopped.")
+            return
         detected = threading.Event()
         last_frame = time.monotonic()
         streak = 0

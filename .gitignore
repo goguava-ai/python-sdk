@@ -9,3 +9,6 @@ wheels/
 # Virtual environments
 .venv
 *.env
+
+# Benchmark output
+guava/benchmark-bots/results/

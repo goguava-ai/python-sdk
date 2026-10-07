@@ -8,3 +8,10 @@
 - [polling_campaign.py](./polling_campaign.py) - An outbound campaign example where an agent calls a list of contacts to conduct a non-partisan political opinion poll, collecting structured responses via `call.set_task(...)` with multiple-choice and free-text fields.
 - [multiple_agents.py](./multiple_agents.py) - Demonstrates running multiple agents in a single process using `guava.Runner`, with one agent listening on a phone number and another on WebRTC.
 - [agent_testing.py](./agent_testing.py) - Demonstrates the three testing patterns: manual conversation with `session.say()`, LLM-driven roleplay via `agent.roleplay()`, and callback overriding with `agent.patch()`; includes pass/fail evaluation criteria.
+
+## Edge examples
+
+[edge/](./edge/) holds examples that run entirely on-device (speech recognition, LLM and voice), triggered by a wake word or the Enter key. They need `guava-sdk[wakeword]` and the Guava Edge runtime, and start the local guava-edge server themselves, e.g. `python -m guava.examples.edge.plant`. See [edge/README.md](./edge/README.md).
+
+- [edge/plant.py](./edge/plant.py) - A house plant that speaks up when its moisture sensor reads dry (sensor trigger), or when you press Enter.
+- [edge/barista.py](./edge/barista.py) - A barista that takes a drink, size and name (wake word or Enter) and reads back the price.

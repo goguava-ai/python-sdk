@@ -72,6 +72,9 @@ class Call:
         self._variables: dict[str, Any] = {}
         self._field_keys_by_task_id: dict[str, list[str]] = {}
 
+        # Set by Agent._init_call if an edge wake trigger started this call.
+        self._edge_trigger: str | None = None
+
     @property
     def id(self) -> str:
         return self._session_id
