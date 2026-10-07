@@ -66,7 +66,7 @@ from .commands import (
 )
 from guava.call_controller import CommandQueueEnd
 from guava.edge_wake import run_wakeword_loop, run_wake_loop, run_button_loop
-from .health import HealthContext, get_health_server
+from .health import HealthContext
 from .threading_utils import create_daemon_thread
 
 logger = logging.getLogger("guava.agent")
@@ -712,23 +712,16 @@ class Agent:
                 self._edge_idle.set()
     
     def listen_phone(self, agent_number: str) -> None:
-        health_ctx = HealthContext()
-        with get_health_server(health_ctx):
-            self._listen_inbound(health_ctx, agent_number=agent_number)
+        from .runner import Runner  # Avoid circular import.
+        Runner().listen_phone(self, agent_number).run()
 
     def listen_webrtc(self, webrtc_code: str | None = None) -> None:
-        if not webrtc_code:
-            logger.info("No WebRTC code provided. Creating a temporary one.")
-            webrtc_code = self._client.create_webrtc_agent(ttl=timedelta(hours=1))
-
-        health_ctx = HealthContext()
-        with get_health_server(health_ctx):
-            self._listen_inbound(health_ctx, webrtc_code=webrtc_code)
+        from .runner import Runner  # Avoid circular import.
+        Runner().listen_webrtc(self, webrtc_code).run()
 
     def listen_sip(self, sip_code: str) -> None:
-        health_ctx = HealthContext()
-        with get_health_server(health_ctx):
-            self._listen_inbound(health_ctx, sip_code=sip_code)
+        from .runner import Runner  # Avoid circular import.
+        Runner().listen_sip(self, sip_code).run()
 
     def call_local(self, variables: dict[str, Any] = {}) -> None:
         webrtc_code = self._client.create_webrtc_agent(ttl=timedelta(minutes=5))
@@ -999,9 +992,8 @@ class Agent:
         self,
         campaign_code: str
     ) -> None:
-        health_ctx = HealthContext()
-        with get_health_server(health_ctx):
-            self._serve_campaign(health_ctx, campaign_code)
+        from .runner import Runner  # Avoid circular import.
+        Runner().attach_campaign(self, campaign_code).run()
 
     @deprecated("test_roleplay() is deprecated; use roleplay() instead.")
     def test_roleplay(self, roleplay_prompt: str, variables=None) -> "TestSession":

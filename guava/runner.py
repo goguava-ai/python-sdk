@@ -47,6 +47,7 @@ class Runner:
 
     def listen_webrtc(self, agent: "Agent", webrtc_code: str | None = None) -> "Runner":
         if not webrtc_code:
+            logger.info("No WebRTC code provided. Creating a temporary one.")
             webrtc_code = agent._client.create_webrtc_agent(ttl=timedelta(hours=1))
         self._add(
             agent._listen_inbound,
