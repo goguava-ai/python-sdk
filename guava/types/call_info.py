@@ -1,5 +1,5 @@
 from typing import Annotated, Literal, Optional, Union
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, JsonValue
 from guava.types import E164PhoneNumber
 
 
@@ -17,6 +17,7 @@ class PSTNCallInfo(BaseModel):
 class WebRTCCallInfo(BaseModel):
     call_type: Literal["webrtc"] = "webrtc"
     webrtc_code: str
+    custom_payload: dict[str, JsonValue] = {}
 
 
 class SipCallInfo(BaseModel):

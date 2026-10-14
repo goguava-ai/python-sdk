@@ -3,7 +3,7 @@ import warnings
 
 from typing_extensions import deprecated
 from typing import Union, Literal, get_args, Annotated, Any, Optional
-from pydantic import BaseModel, Field, TypeAdapter
+from pydantic import BaseModel, Field, TypeAdapter, JsonValue
 from .types import E164PhoneNumber, DTMFDigit, TerminationReason
 
 class BaseEvent(BaseModel):
@@ -129,6 +129,10 @@ class DTMFPressedEvent(BaseEvent):
     digit: DTMFDigit
     recent_digits: str = ''
 
+class WebRTCMessageEvent(BaseEvent):
+    event_type: Literal['webrtc-message'] = 'webrtc-message'
+    payload: dict[str, JsonValue] = {}
+
 class AgentDTMFSentEvent(BaseEvent):
     """
     The agent pressed DTMF digits, either on its own after `call.set_agent_dtmf(enabled=True)`
@@ -159,6 +163,7 @@ Event = Annotated[
         EscalateEvent,
         DTMFPressedEvent,
         AgentDTMFSentEvent,
+        WebRTCMessageEvent,
     ],
     Field(discriminator="event_type"),
 ]

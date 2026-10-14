@@ -51,6 +51,7 @@ from .events import (
     EscalateEvent,
     DTMFPressedEvent,
     AgentDTMFSentEvent,
+    WebRTCMessageEvent,
     decode_event_dict,
 )
 from .commands import (
@@ -161,6 +162,7 @@ class Agent:
         self._on_escalate: Optional[Callable[[Call, EscalateEvent], None] | Callable[[Call], None]] = None
         self._on_caller_dtmf: Optional[Callable[[Call, DTMFPressedEvent], None]] = None
         self._on_agent_dtmf: Optional[Callable[[Call, AgentDTMFSentEvent], None]] = None
+        self._on_webrtc_message: Optional[Callable[[Call, WebRTCMessageEvent], None]] = None
 
         self._edge_callbacks: dict[str, Callable[[Call], None]] = {}  # "press_enter" | "wakeword" | "wake"
         self._edge_wake_trigger: Optional[Callable[[], None]] = None
@@ -392,6 +394,14 @@ class Agent:
     def on_agent_dtmf(self, fn=None):
         return self._register("_on_agent_dtmf", fn)
 
+    @overload
+    def on_webrtc_message(self, fn: Callable[[Call, WebRTCMessageEvent], None], /) -> Callable[[Call, WebRTCMessageEvent], None]: ...
+    @overload
+    def on_webrtc_message(self) -> Callable[[Callable[[Call, WebRTCMessageEvent], None]], Callable[[Call, WebRTCMessageEvent], None]]: ...
+
+    def on_webrtc_message(self, fn=None):
+        return self._register("_on_webrtc_message", fn)
+
     @edge_only
     def on_press_enter(self, fn=None):
         def register(fn):
@@ -603,6 +613,9 @@ class Agent:
             case AgentDTMFSentEvent():
                 if self._on_agent_dtmf is not None:
                     self._invoke_handler(call, "on_agent_dtmf", False, self._on_agent_dtmf, call, event)
+            case WebRTCMessageEvent():
+                if self._on_webrtc_message is not None:
+                    self._invoke_handler(call, "on_webrtc_message", False, self._on_webrtc_message, call, event)
             case EscalateEvent():
                 if self._on_escalate is not None:
                     # Inform the agent on escalation error.

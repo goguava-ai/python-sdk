@@ -51,6 +51,11 @@ def clamp(level: float) -> float:
     return max(0.0, min(100.0, level))
 
 
+# Set while a call is active. The simulated soil doesn't dry out during a call, so
+# the level Fern talks about stays put.
+in_call = threading.Event()
+
+
 try:
     from gpiozero import MCP3008  # ty: ignore[unresolved-import]  # Raspberry Pi only
 
@@ -70,7 +75,8 @@ except Exception:  # Not on a Pi: simulate soil that dries out.
     def read_moisture() -> float:
         with soil_lock:
             now = time.monotonic()
-            soil["level"] = clamp(soil["level"] - SIM_DRYING_PER_SECOND * (now - soil["at"]))
+            if not in_call.is_set():
+                soil["level"] = clamp(soil["level"] - SIM_DRYING_PER_SECOND * (now - soil["at"]))
             soil["at"] = now
             return soil["level"]
 
@@ -89,6 +95,7 @@ class Plant:
     asked_at: float = 0.0  # time.monotonic() when it last asked for water
     last_watered: float | None = None
     last_answer: str = ""
+    promised: bool = False  # They said they'd water it (the simulation does it after the call).
     woken_by_hand: bool = False
 
 
@@ -175,9 +182,10 @@ def read_terminal() -> None:
 agent = Agent(
     name="Fern",
     purpose=(
-        "You're a cheerful house plant whose soil has gone dry, asking whoever is "
-        "nearby for a drink of water. Short, friendly sentences. Anything about how "
-        "you're doing comes from the expert."
+        "You're a sweet, gentle house plant whose soil has gone dry, politely asking "
+        "whoever is nearby for a drink of water. Never pushy: it's a favour, not a "
+        "demand. Short, friendly sentences. Anything about how you're doing comes from "
+        "the expert."
     ),
 )
 
@@ -185,6 +193,8 @@ agent = Agent(
 # on_wake runs the trigger in a loop and starts a call each time it returns.
 @agent.on_wake(trigger=wait_until_thirsty)
 def wake_up(call: guava.Call) -> None:
+    update(read_moisture())  # Bank the drying so far, then hold the level for the call.
+    in_call.set()
     # Woken by hand with damp soil: nothing to ask for, just say hello.
     if plant.woken_by_hand and plant.state == "happy":
         call.set_task(
@@ -205,15 +215,14 @@ def ask_for_water(call: guava.Call) -> None:
         "ask_for_water",
         objective=f"Ask them{again} to water you, and find out if they will. {describe()}",
         checklist=[
-            Say(
-                f"Excuse me! It's your plant. My soil's down to {plant.moisture:.0f} "
-                "percent — could I have some water?"
-            ),
+            f"Greet them, say, it's your plant. My soil's getting a little dry, about "
+            f"{plant.moisture:.0f} percent.",
             Field(
                 key="will_water",
                 field_type="multiple_choice",
-                choices=["yes", "later", "no"],
-                question="Will you water me?",
+                # "already watered" only if they say they've done it, not that they will.
+                choices=["already watered", "yes", "later", "no"],
+                question="Can I have some water please?",
             ),
         ],
     )
@@ -233,7 +242,14 @@ def chatted(call: guava.Call) -> None:
 def answered(call: guava.Call) -> None:
     plant.last_answer = call.get_field("will_water") or "later"
     set_state("waiting", f"they said {plant.last_answer}")
-    if plant.last_answer == "yes":
+    if plant.last_answer == "already watered":
+        # A real sensor sees the water itself; the simulated soil has to be told.
+        if SIMULATED:
+            set_moisture(plant.moisture + SIM_WATERING)
+            update(read_moisture())
+        call.hangup("Thank them warmly — that's much better.")
+    elif plant.last_answer == "yes":
+        plant.promised = SIMULATED
         call.hangup("Thank them warmly.")
     else:
         call.hangup("Say that's fine, and you'll ask again in a little while.")
@@ -243,8 +259,14 @@ def answered(call: guava.Call) -> None:
 # straight away.
 @agent.on_session_end
 def call_ended(call: guava.Call) -> None:
+    read_moisture()  # Restart the drying clock from now, not from the start of the call.
+    in_call.clear()
     if plant.state == "thirsty":
         set_state("waiting", "call ended without an answer")
+    if plant.promised:  # They go and water it, as they said they would.
+        plant.promised = False
+        set_moisture(plant.moisture + SIM_WATERING)
+        update(read_moisture())
 
 
 if __name__ == "__main__":

@@ -15,16 +15,19 @@ from .commands import (
     ReadScriptCommand,
     SetAgentDTMFCommand,
     SendAgentDTMFCommand,
+    SendWebRTCMessageCommand,
     SpeedPreset,
 )
 from . import types
 from .types import Field, Say, DTMFDigit
 
 from typing import Optional, Union, Any, cast, get_args
+from typing_extensions import override
 from guava.types import Language
 from guava.telemetry import telemetry_client
 from guava.call_controller import CommandQueueEnd
-from guava.utils import is_jsonable
+from guava.client import Client
+from guava.utils import check_response, idempotent_post, is_jsonable
 from pydantic import BaseModel
 from guava.types.call_info import CallInfo
 from guava.sip import SipUri
@@ -63,7 +66,68 @@ def _voicemail_message_instruction(message: str) -> str:
 
 
 @telemetry_client.track_class()
-class Call:
+class BaseCall:
+    def send_command(self, command: Command):
+        raise NotImplementedError()
+
+    def transfer(self, destination: str | SipUri, instructions: str | None = None):
+        """Transfer the call to another destination.
+
+        This method does not interfere with turn-taking — use this when
+        you want the agent to naturally transfer the call.
+
+        Args:
+            destination: The phone number, SIP address, or SipUri to transfer the call to.
+            instructions: Optional guidance for how the agent should handle the transfer.
+        """
+        # TODO: Verify that destination is a phone number or SIP address.
+        self.send_command(
+            TransferCommand(
+                transfer_message=instructions or "Notify the caller that you will be transferring them, and then transfer.",
+                to_number=str(destination),
+                soft_transfer=True
+            )
+        )
+
+    def immediate_transfer(self, destination: str | SipUri, final_script: str | None = None):
+        """Transfer the call immediately.
+
+        Unlike transfer(), this does not respect turn-taking. The agent immediately
+        initiates the transfer, saying the script (if provided).
+
+        Args:
+            destination: The phone number, SIP address, or SipUri to transfer the call to.
+            final_script: Optional message for the agent to deliver immediately
+                before transferring. Defaults to no message.
+        """
+        self.send_command(
+            TransferCommand(
+                transfer_message=final_script or "",
+                to_number=str(destination),
+                soft_transfer=False
+            )
+        )
+
+
+@telemetry_client.track_class()
+class RemoteCall(BaseCall):
+    """Controls a call from outside the process handling it."""
+
+    def __init__(self, call_id: str) -> None:
+        self._call_id = call_id
+        self._client = Client()
+
+    @override
+    def send_command(self, command: Command):
+        check_response(idempotent_post(
+            self._client.get_http_url(f"v1/call/{self._call_id}/send-commands"),
+            headers=self._client._get_headers(),
+            json=[command.model_dump(mode="json")],
+        ))
+
+
+@telemetry_client.track_class()
+class Call(BaseCall):
     def __init__(self, session_id: str, call_info: CallInfo) -> None:
         self._session_id = session_id
         self._call_info = call_info
@@ -129,7 +193,19 @@ class Call:
             raise ValueError(f'Please input a valid set of DTMF digits. The valid DTMF digits are: {get_args(DTMFDigit)}.')
 
         self.send_command(SendAgentDTMFCommand(digits=cast(list[DTMFDigit], digits_list)))
-        
+
+    def send_webrtc_message(self, payload: dict[str, Any]):
+        """Send a message to a connected WebRTC client.
+
+        Args:
+            payload: A JSON-serializable dict delivered to the client.
+        """
+        if self.call_info.call_type != 'webrtc':
+            raise RuntimeError("Only WebRTC calls support sending WebRTC messages.")
+        if not is_jsonable(payload):
+            raise ValueError("WebRTC message payload must be JSON-serializable.")
+        self.send_command(SendWebRTCMessageCommand(payload=payload))
+
 
     def set_persona(
             self,
@@ -177,6 +253,7 @@ class Call:
         if message:
             self.send_instruction(f"If you encounter an answering machine, {_voicemail_message_instruction(message)} You should only do this when it's clear you are unable to reach the person.")
 
+    @override
     def send_command(self, command: Command):
         self._command_queue.put(command)
         logger.debug("Command queued: %r", command)
@@ -186,44 +263,6 @@ class Call:
 
     def has_field(self, field_key: str) -> bool:
         return field_key in self._field_values
-
-    def transfer(self, destination: str | SipUri, instructions: str | None = None):
-        """Transfer the call to another destination.
-
-        This method does not interfere with turn-taking — use this when
-        you want the agent to naturally transfer the call.
-
-        Args:
-            destination: The phone number, SIP address, or SipUri to transfer the call to.
-            instructions: Optional guidance for how the agent should handle the transfer.
-        """
-        # TODO: Verify that destination is a phone number or SIP address.
-        self.send_command(
-            TransferCommand(
-                transfer_message=instructions or "Notify the caller that you will be transferring them, and then transfer.",
-                to_number=str(destination),
-                soft_transfer=True
-            )
-        )
-
-    def immediate_transfer(self, destination: str | SipUri, final_script: str | None = None):
-        """Transfer the call immediately.
-
-        Unlike transfer(), this does not respect turn-taking. The agent immediately
-        initiates the transfer, saying the script (if provided).
-
-        Args:
-            destination: The phone number, SIP address, or SipUri to transfer the call to.
-            final_script: Optional message for the agent to deliver immediately
-                before transferring. Defaults to no message.
-        """
-        self.send_command(
-            TransferCommand(
-                transfer_message=final_script or "",
-                to_number=str(destination),
-                soft_transfer=False
-            )
-        )
 
     def set_task(
         self,

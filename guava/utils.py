@@ -3,6 +3,8 @@ import os
 import functools
 import shutil
 import tempfile
+import time
+import uuid
 import warnings
 import httpx
 import json
@@ -41,6 +43,37 @@ def check_response(response: httpx.Response) -> httpx.Response:
 
         msg = f"HTTP {response.status_code} {response.reason_phrase} for url '{response.url}', Body: {body}"
         raise httpx.HTTPStatusError(msg, request=exc.request, response=exc.response) from None
+
+
+RETRYABLE_STATUS_CODES = {408, 409, 429, 500, 502, 503, 504}
+# Delay before each retry. Retries past the end of the table reuse the last delay.
+RETRY_DELAYS_SEC = [0.0, 0.5, 1.0, 2.0, 5.0]
+
+def idempotent_post(url: str, *, headers: Any = None, retries: int = 3, **kwargs: Any) -> httpx.Response:
+    """
+    Same arguments as httpx.post, but retries transport errors and RETRYABLE_STATUS_CODES. A single
+    Idempotency-Key is sent with every attempt so the server can drop duplicates.
+
+    Args:
+        retries: Number of retries after the first attempt.
+
+    Returns:
+        The last response. Like httpx.post, error statuses are not raised.
+    """
+    headers = httpx.Headers(headers)
+    headers.setdefault("Idempotency-Key", str(uuid.uuid4()))
+    for attempt in range(retries + 1):
+        is_last_attempt = attempt == retries
+        try:
+            response = httpx.post(url, headers=headers, **kwargs)
+        except httpx.TransportError:
+            if is_last_attempt:
+                raise
+        else:
+            if response.status_code not in RETRYABLE_STATUS_CODES or is_last_attempt:
+                return response
+        time.sleep(RETRY_DELAYS_SEC[min(attempt, len(RETRY_DELAYS_SEC) - 1)])
+    raise AssertionError("unreachable")
 
 
 F = TypeVar("F", bound=Callable[..., Any])

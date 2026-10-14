@@ -7,9 +7,6 @@ from guava import logging_utils
 from guava.examples import get_agent_number
 
 
-# Keep a mapping of calls so we can conference them together.
-WARM_TRANSFERS: dict[str, guava.Call] = {}
-
 logger = logging.getLogger("warm_transfer_example")
 
 
@@ -38,16 +35,15 @@ def on_collect_reason(call: guava.Call):
     # Generate a random conference ID that will be eventually used to join the two calls.
     conference_id = secrets.token_hex(10)
 
-    # Keep a reference to this call object so we can trigger it from another handler.
-    WARM_TRANSFERS[conference_id] = call
-
-    # Add this new outbound call onto our existing runner.
+    # Add this new outbound call onto our existing runner. Pass this call's ID so the
+    # outbound call can transfer it later.
     runner.call_phone(
         outbound_agent,
         agent_number,
         transfer_destination,
         variables={
             "conference_id": conference_id,
+            "original_call_id": call.id,
             "call_reason": call.get_field("reason_for_calling"),
         },
     )
@@ -64,7 +60,7 @@ outbound_agent = guava.Agent(
 def on_outbound_call_start(call: guava.Call):
     call.set_task(
         "confirm_ready",
-        f"""A caller is calling about {call.get_variable("call_reason")}. You are not talking to the caller - you are talking to a customers service representative.""",
+        f"""A caller is calling about {call.get_variable("call_reason")}. You are not talking to the caller - you are talking to a customer service representative.""",
         checklist=[
             "Inform the customer service agent of the caller's reason for calling.",
             "Determine if the service agent is ready for a transfer.",
@@ -74,9 +70,8 @@ def on_outbound_call_start(call: guava.Call):
 
 @outbound_agent.on_task_complete("confirm_ready")
 def on_confirm_ready(call: guava.Call):
-    # Look up the conference ID.
     conference_id = call.get_variable("conference_id")
-    other_call = WARM_TRANSFERS[conference_id]
+    other_call = guava.RemoteCall(call.get_variable("original_call_id"))
 
     # Join the two calls.
     destination = f"conference:{conference_id}"
@@ -85,14 +80,14 @@ def on_confirm_ready(call: guava.Call):
         destination, "Transfer to the caller. Tell the rep that you are 'Patching in the caller.'"
     )
 
-    # Remove the old call ID.
-    del WARM_TRANSFERS[conference_id]
-
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "transfer_destination", metavar="PHONE_NUMBER", help="Number to warm transfer callers to."
+        "--transfer-destination",
+        metavar="PHONE_NUMBER",
+        required=True,
+        help="Number to warm transfer callers to.",
     )
     parser.add_argument(
         "--agent-number",

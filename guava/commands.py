@@ -172,6 +172,10 @@ class SendAgentDTMFCommand(BaseModel):
     command_type: Literal["send-agent-dtmf"] = 'send-agent-dtmf'
     digits: list[DTMFDigit]
 
+class SendWebRTCMessageCommand(BaseModel):
+    command_type: Literal["send-webrtc-message"] = 'send-webrtc-message'
+    payload: dict[str, JsonValue] = {}
+
 Command = Annotated[
     Union[
         StartOutboundCallCommand,
@@ -193,7 +197,8 @@ Command = Annotated[
         SendCallerTextCommand,
         ExpertErrorCommand,
         SetAgentDTMFCommand,
-        SendAgentDTMFCommand, 
+        SendAgentDTMFCommand,
+        SendWebRTCMessageCommand,
     ],
     Field(discriminator="command_type"),
 ]

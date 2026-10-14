@@ -1,18 +1,24 @@
 """Edge-only examples: speech recognition, the LLM and the voice all run on-device.
 
-These need the `wakeword` extra and the Guava Edge runtime:
+These need the Guava Edge runtime:
 
-    pip install "guava-sdk[wakeword]"
     guava edge install && guava edge install models   # one-off
     python -m guava.examples.edge.plant
+
+The first run installs what's missing from the `wakeword` extra into the current
+environment, after installing PortAudio with Homebrew (pyaudio builds against it), the
+same way `guava run --edge` does for an agent project.
 
 Importing this package starts the local guava-edge server (unless one is already running,
 e.g. under `guava run --edge`) and points the SDK at it. It shuts down when Python exits.
 """
 
 import atexit
+import importlib
+import importlib.metadata
 import importlib.util
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -27,15 +33,83 @@ STARTUP_TIMEOUT = 120
 WAKEWORD_MODULES = ("nanowakeword", "onnxruntime", "pyaudio")
 
 
-def _require_wakeword_extra() -> None:
-    """The examples ship in every install but only run with the `wakeword` extra."""
-    missing = [m for m in WAKEWORD_MODULES if importlib.util.find_spec(m) is None]
-    if missing:
+# Where Homebrew and MacPorts put libportaudio.
+PORTAUDIO_LIB_DIRS = (
+    "/opt/homebrew/lib",
+    "/opt/homebrew/opt/portaudio/lib",
+    "/usr/local/lib",
+    "/usr/local/opt/portaudio/lib",
+    "/opt/local/lib",
+)
+
+
+def _run(argv: list[str], what: str) -> None:
+    print(f"→ {what}…", file=sys.stderr, flush=True)
+    try:
+        status = subprocess.run(argv).returncode
+    except OSError as e:
+        sys.exit(f"Failed to run {argv[0]}: {e}")
+    if status != 0:
+        sys.exit(f"`{' '.join(argv)}` failed (exit code {status}).")
+
+
+def _ensure_portaudio() -> None:
+    """pyaudio has no macOS wheels and builds from source against PortAudio."""
+    if sys.platform != "darwin" or any(
+        Path(d, "libportaudio.dylib").exists() for d in PORTAUDIO_LIB_DIRS
+    ):
+        return
+    brew = shutil.which("brew") or next(
+        (b for b in ("/opt/homebrew/bin/brew", "/usr/local/bin/brew") if Path(b).exists()),
+        None,
+    )
+    if brew is None:
         sys.exit(
-            f"The edge examples need the wakeword extra (missing: {', '.join(missing)}). "
-            "Install it with:\n"
-            '  pip install "guava-sdk[wakeword]"'
+            "The edge examples need the PortAudio library, and Homebrew wasn't found to "
+            "install it.\nInstall Homebrew (https://brew.sh), or install PortAudio "
+            "yourself, then try again:\n  brew install portaudio"
         )
+    _run([brew, "install", "portaudio"], "Installing PortAudio (needed for microphone input)")
+
+
+def _wakeword_requirements() -> list[str]:
+    """The `wakeword` extra's requirements, as declared in guava-sdk's metadata."""
+    requirements = []
+    for req in importlib.metadata.requires("guava-sdk") or []:
+        spec, _, marker = req.partition(";")
+        if marker.replace("'", '"').replace(" ", "") == 'extra=="wakeword"':
+            requirements.append(spec.strip())
+    return requirements
+
+
+def _ensure_wakeword_extra() -> None:
+    """The examples ship in every install but need the `wakeword` extra, so install
+    whatever's missing into the interpreter running them."""
+    missing = [m for m in WAKEWORD_MODULES if importlib.util.find_spec(m) is None]
+    if not missing:
+        return
+    print(
+        f"→ First run: installing the on-device audio and wake-word packages "
+        f"({', '.join(missing)}). This can take a few minutes.",
+        file=sys.stderr,
+        flush=True,
+    )
+    if "pyaudio" in missing:
+        _ensure_portaudio()
+
+    requirements = _wakeword_requirements()
+    if importlib.util.find_spec("pip") is not None:
+        installer = [sys.executable, "-m", "pip", "install"]
+    elif uv := shutil.which("uv"):
+        # uv-made virtualenvs don't include pip.
+        installer = [uv, "pip", "install", "--python", sys.executable]
+    else:
+        sys.exit(
+            "The edge examples need the wakeword extra, and neither pip nor uv is "
+            'available to install it. Install it with:\n  pip install "guava-sdk[wakeword]"'
+        )
+    _run([*installer, *requirements], f"Installing {', '.join(requirements)}")
+    importlib.invalidate_caches()
 
 
 def _binary_path() -> Path:
@@ -119,5 +193,5 @@ def _ensure_edge_server() -> None:
         os.environ.update(GUAVA_BASE_URL=LOCAL_BASE_URL, GUAVA_API_KEY="gva-edge", GUAVA_EDGE="1")
 
 
-_require_wakeword_extra()
+_ensure_wakeword_extra()
 _ensure_edge_server()
