@@ -70,6 +70,57 @@ class BaseCall:
     def send_command(self, command: Command):
         raise NotImplementedError()
 
+    def set_language_mode(
+            self,
+            primary: Language = "english",
+            secondary: Optional[list[Language]] = None,
+    ):
+        self.send_command(
+            SetLanguageMode(
+                primary=primary,
+                secondary=secondary or [],
+            )
+        )
+
+    def set_persona(
+            self,
+            organization_name: Optional[str] = None,
+            agent_name: Optional[str] = None,
+            agent_purpose: Optional[str] = None,
+            voice: Optional[str] = None,
+            pronunciations: Optional[dict[str, str]] = None,
+            speech_speed: Optional[SpeedPreset] = None
+    ):
+        self.send_command(
+            SetPersona(
+                organization_name=organization_name,
+                agent_name=agent_name,
+                agent_purpose=agent_purpose,
+                voice=voice,
+                tts_replacements=pronunciations,
+                tts_speed=speech_speed
+            )
+        )
+
+    def retry_task(self, reason: str):
+        self.send_command(RetryTaskCommand(reason=reason))
+
+    def read_script(self, script: str):
+        self.send_command(ReadScriptCommand(script=script))
+
+    def add_info(self, label: str, info: Any):
+        self.send_instruction(f"Here is some information about the following topic {label}:\n{json.dumps(info, indent=2)}")
+
+    def send_instruction(self, instruction: str):
+        self.send_command(SendInstructionCommand(instruction=instruction))
+
+    def hangup(self, final_instructions: str =''):
+        if final_instructions:
+            instructions = f"Start ending the conversation. Here are your final instructions: {final_instructions} Once you've completed the final instructions, naturally end the conversation and hang up the call."
+        else:
+            instructions = "Naturally end the conversation and hang up the call."
+        self.send_instruction(instructions)
+
     def transfer(self, destination: str | SipUri, instructions: str | None = None):
         """Transfer the call to another destination.
 
@@ -163,18 +214,6 @@ class Call(BaseCall):
     set_var = set_variable
     get_var = get_variable
 
-    def set_language_mode(
-            self,
-            primary: Language = "english",
-            secondary: Optional[list[Language]] = None,
-    ):
-        self.send_command(
-            SetLanguageMode(
-                primary=primary,
-                secondary=secondary or [],
-            )
-        )
-
     def set_agent_dtmf(self, enabled: bool):
         if self.call_info.call_type == 'webrtc':
             raise RuntimeError("WebRTC calls do not support sending DTMF.")
@@ -205,27 +244,6 @@ class Call(BaseCall):
         if not is_jsonable(payload):
             raise ValueError("WebRTC message payload must be JSON-serializable.")
         self.send_command(SendWebRTCMessageCommand(payload=payload))
-
-
-    def set_persona(
-            self,
-            organization_name: Optional[str] = None,
-            agent_name: Optional[str] = None,
-            agent_purpose: Optional[str] = None,
-            voice: Optional[str] = None,
-            pronunciations: Optional[dict[str, str]] = None,
-            speech_speed: Optional[SpeedPreset] = None
-    ):
-        self.send_command(
-            SetPersona(
-                organization_name=organization_name,
-                agent_name=agent_name,
-                agent_purpose=agent_purpose,
-                voice=voice,
-                tts_replacements=pronunciations,
-                tts_speed=speech_speed
-            )
-        )
 
     def set_voicemail_action(self, hangup: bool = False, message: str | None = None):
         """
@@ -307,26 +325,6 @@ class Call(BaseCall):
                 completion_criteria=completion_criteria,
             )
         )
-
-    def retry_task(self, reason: str):
-        self.send_command(RetryTaskCommand(reason=reason))
-
-    def read_script(self, script: str):
-        self.send_command(ReadScriptCommand(script=script))
-
-    def add_info(self, label: str, info: Any):
-        self.send_instruction(f"Here is some information about the following topic {label}:\n{json.dumps(info, indent=2)}")
-
-    def send_instruction(self, instruction: str):
-        self.send_command(SendInstructionCommand(instruction=instruction))
-
-    def hangup(self, final_instructions: str =''):
-        if final_instructions:
-            instructions = f"Start ending the conversation. Here are your final instructions: {final_instructions} Once you've completed the final instructions, naturally end the conversation and hang up the call."
-        else:
-            instructions = "Naturally end the conversation and hang up the call."
-        self.send_instruction(instructions)
-
 
     def _shutdown_queue(self):
         self._command_queue.put(CommandQueueEnd())

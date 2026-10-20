@@ -16,7 +16,7 @@ from websockets.sync.client import connect as ws_connect, ClientConnection
 from .protocol import GuavaOpen, GuavaOpenAck, GuavaMessage, GuavaClose, GuavaPing, GuavaPong, GuavaAck, CloseReason, now_ms
 from threading import Lock, Thread, Event
 from queue import Queue, Empty
-from guava.telemetry import telemetry_client
+from guava.telemetry import telemetry_client, TelemetryEvent
 from guava.threading_utils import LazySingleton, create_daemon_thread
 from .utils import EventCounter
 
@@ -40,7 +40,7 @@ RecvT = TypeVar("RecvT")
 # Cache a single SSL context built from certifi's CA bundle.
 _ssl_context = LazySingleton(lambda: ssl.create_default_context(cafile=certifi.where()))
 
-@telemetry_client.track_class()
+@telemetry_client.track_class(only_exceptions={"send", "recv"})
 class GuavaSocket(Generic[SendT, RecvT]):
     """A higher-level websocket wrapper that supports reconnections."""
     
@@ -106,6 +106,11 @@ class GuavaSocket(Generic[SendT, RecvT]):
         if self._close_reason is None:
             self._close_reason = reason
             self._close_description = description
+            telemetry_client.send_event(TelemetryEvent.GUAVASOCKET_CLOSED, {
+                "connection_id": self._connection_id,
+                "reason": reason,
+                "description": description,
+            })
 
     def _reconnect_timeout(self, attempt_num: int) -> float:
         """First try reconnecting quickly - then backoff."""
@@ -139,12 +144,14 @@ class GuavaSocket(Generic[SendT, RecvT]):
 
         num_attempts = 0
         websocket = None
+        start_time = time.monotonic()
 
         while True:
             # Cap number of reconnect-attempts and just fail.
             if num_attempts >= self._max_reconnect_attempts:
-                self._logger.error("Couldn't connect to server after %d attempts.", num_attempts)
-                self._set_close_reason("reconnection-failed", f"Couldn't connect to server after {num_attempts} attempts.")
+                duration_sec = time.monotonic() - start_time
+                self._logger.error("Couldn't connect to server after %d attempts (%.1fs).", num_attempts, duration_sec)
+                self._set_close_reason("reconnection-failed", f"Couldn't connect to server after {num_attempts} attempts ({duration_sec:.1f}s).")
                 raise GuavaSocketConnectionFailed()
             
             num_attempts += 1
@@ -171,14 +178,22 @@ class GuavaSocket(Generic[SendT, RecvT]):
                         raise GuavaSocketClosedError(response.reason, response.description)
                     case GuavaOpenAck():
                         # Retransmit messages that the server hasn't seen yet
+                        num_retransmitted = 0
                         for seq, payload in self._rtx_buffer:
                             if seq > response.last_seen_sequence:
                                 websocket.send(GuavaMessage(sequence=seq, payload=payload).model_dump_json())
-                                
+                                num_retransmitted += 1
+
                         # Prune RTX buffer.
                         self._prune_rtx_buffer(response.last_seen_sequence)
 
                         # The socket is now ready.
+                        telemetry_client.send_event(TelemetryEvent.GUAVASOCKET_ESTABLISHED, {
+                            "connection_id": self._connection_id,
+                            "attempts": num_attempts,
+                            "duration_sec": time.monotonic() - start_time,
+                            "num_retransmitted": num_retransmitted,
+                        })
                         return websocket
                     case _:
                         self._logger.error("Received unexpected response from server: %r", response)

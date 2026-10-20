@@ -82,9 +82,9 @@ class Client:
 
             logger.debug("Checking deprecation for SDK %s, %s.", SDK_NAME, __version__)
             try:
-                r = httpx.post(self.get_http_url("v1/check-sdk-deprecation"), params={
-                    "sdk_name": SDK_NAME,
-                    "sdk_version": __version__
+                r = httpx.get(self.get_http_url("v1/deprecation-status"), params={
+                    "component": SDK_NAME,
+                    "version": __version__
                 })
                 check_response(r)
                 deprecation_info = r.json()
@@ -457,7 +457,7 @@ class Client:
 
     def send_sms(self, from_number: str, to_number: str, message: str) -> None:
         response = httpx.post(
-            self.get_http_url("v1/send-sms"),
+            self.get_http_url("v1/sms/send"),
             json={
                 "from_number": from_number,
                 "to_number": to_number,
