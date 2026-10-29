@@ -105,7 +105,7 @@ class BaseCall:
     def retry_task(self, reason: str):
         self.send_command(RetryTaskCommand(reason=reason))
 
-    def read_script(self, script: str):
+    def read_script(self, script: str | dict[Language, str]):
         self.send_command(ReadScriptCommand(script=script))
 
     def add_info(self, label: str, info: Any):

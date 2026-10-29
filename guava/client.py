@@ -33,6 +33,8 @@ from .utils import get_base_url, check_exactly_one, check_response
 from .auth import AuthStrategy, APIKeyAuth, GuavaDeploy, GUAVA_DEPLOY_TOKEN_PATH, cli_auth, CLIAuth
 from .telemetry import telemetry_client
 from guava.types.call_info import CallInfo, PSTNCallInfo
+from guava.types.api import PaginatedResponse
+from guava.types.sms import SMSMessage
 from datetime import timedelta, datetime, timezone
 from typing_extensions import deprecated
 
@@ -126,14 +128,39 @@ class Client:
             "x-guava-sdk-version": __version__,
         }
     
-    def create_webrtc_agent(self, ttl: timedelta | None = None) -> str:
+    def create_webrtc_agent(self, ttl: timedelta | None = None, require_token: bool = False) -> str:
+        """Creates a WebRTC code and returns it.
+
+        Args:
+            ttl: How long the code remains valid. Defaults to no expiration.
+            require_token: If true, callers must present a single-use client token, created by your backend.
+        """
         query = {}
         if ttl:
-            query["ttl_sec"] = ttl.total_seconds()
+            query["expires_in"] = int(ttl.total_seconds())
+        if require_token:
+            query["require_token"] = "true"
 
-        r = httpx.post(self.get_http_url("v1/webrtc-agents"), params=query, headers=self._get_headers())
+        r = httpx.post(self.get_http_url("v1/webrtc/codes"), params=query, headers=self._get_headers())
         check_response(r)
         return r.json()['webrtc_code']
+
+    def create_webrtc_client_token(self, webrtc_code: str, expires_in: timedelta | None = None) -> str:
+        """Creates a single-use token that lets a client start a call to a WebRTC code.
+
+        Tokens are consumed when a call starts, so create a new one for each call.
+
+        Args:
+            webrtc_code: The WebRTC code the token grants access to.
+            expires_in: How long the token remains valid if unused. Defaults to 1 hour.
+        """
+        query: dict[str, str | int] = {"webrtc_code": webrtc_code}
+        if expires_in:
+            query["expires_in"] = int(expires_in.total_seconds())
+
+        r = httpx.post(self.get_http_url("v1/webrtc/client-tokens"), params=query, headers=self._get_headers())
+        check_response(r)
+        return r.json()['token']
 
     def create_sip_agent(self) -> str:
         r = httpx.post(self.get_http_url("v1/sip-agents"), headers=self._get_headers())
@@ -474,7 +501,7 @@ class Client:
         *,
         timeout: float = 60.0,
         poll_interval: float = 2.0,
-    ) -> Optional[dict]:
+    ) -> Optional[SMSMessage]:
         """Wait for and return the next inbound SMS from ``from_number`` to ``to_number``.
 
         Polls the inbox for messages received after this call begins, blocking until one
@@ -487,26 +514,23 @@ class Client:
             poll_interval: Seconds to wait between inbox polls.
 
         Returns:
-            The message dict (``id``, ``from_number``, ``to_number``, ``content``,
-            ``received_at``, ``modality``, ``direction``), or ``None`` if ``timeout``
-            elapses with no new message.
+            The message, or ``None`` if ``timeout`` elapses with no new message.
         """
         start = datetime.now(timezone.utc).isoformat()
         deadline = time.monotonic() + timeout
         while True:
             response = check_response(httpx.get(
-                self.get_http_url("v1/messages"),
+                self.get_http_url("v1/sms/messages"),
                 params={
                     "to_number": to_number,
                     "from_number": from_number,
-                    "modality": "sms",
-                    "start": start,
+                    "received_after": start,
                 },
                 headers=self._get_headers(),
             ))
-            messages = response.json().get("messages", [])
-            if messages:
-                return messages[0]
+            page = PaginatedResponse[SMSMessage].model_validate(response.json())
+            if page.results:
+                return page.results[0]
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 return None

@@ -40,7 +40,13 @@ class SetTaskCommand(BaseModel):
 
 class ReadScriptCommand(BaseModel):
     command_type: Literal["read-script"] = "read-script"
-    script: str
+    script: str | dict[Language, str]
+
+    @model_validator(mode="after")
+    def _require_nonempty_script_dict(self):
+        if isinstance(self.script, dict) and not self.script:
+            raise ValueError("'script' must not be an empty dict.")
+        return self
 
 
 class AnswerQuestionCommand(BaseModel):
