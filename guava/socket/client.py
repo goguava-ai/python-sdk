@@ -169,8 +169,8 @@ class GuavaSocket(Generic[SendT, RecvT]):
                     ).model_dump_json()
                 )
 
-                # If we don't get a response back in 10 seconds, the socket is probably invalid.
-                response: GuavaOpenAck | GuavaClose = TypeAdapter(Union[GuavaOpenAck, GuavaClose]).validate_json(websocket.recv(timeout=10))
+                # If we don't get a response back in 15 seconds, the socket is probably invalid.
+                response: GuavaOpenAck | GuavaClose = TypeAdapter(Union[GuavaOpenAck, GuavaClose]).validate_json(websocket.recv(timeout=15))
                 
                 match response:
                     case GuavaClose():
