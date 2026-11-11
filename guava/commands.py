@@ -137,6 +137,11 @@ class TransferCommand(BaseModel):
     to_number: str
     soft_transfer: bool = False
 
+class HangupCommand(BaseModel):
+    """Hang up the call immediately, without waiting for turn-taking."""
+    command_type: Literal["hangup-call"] = "hangup-call"
+    final_script: Optional[str] = None
+
 class ChoiceResultCommand(BaseModel):
     command_type: Literal["choice-query-result"] = 'choice-query-result'
     field_key: str
@@ -196,6 +201,7 @@ Command = Annotated[
         SetPersona,
         SendInstructionCommand,
         TransferCommand,
+        HangupCommand,
         ChoiceResultCommand,
         SetLanguageMode,
         RetryTaskCommand,

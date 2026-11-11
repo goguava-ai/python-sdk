@@ -913,7 +913,7 @@ class Agent:
                 raise ValueError(f"Variable '{key}' value is not JSON serializable: {val!r}")
 
         response = check_response(httpx.post(
-            self._client.get_http_url("v2/create-outbound"),
+            self._client.get_http_url("v3/reserve-outbound"),
             headers=self._client._get_headers(),
             params={
                 "from_number": from_number,
@@ -922,13 +922,19 @@ class Agent:
         ))
         call_id = response.json()["call_id"]
 
-        # Initialize the call, invoking on_call_start
+        # Initialize the call before dialing, invoking on_call_start.
         try:
             call = self._init_call(call_id, PSTNCallInfo(from_number=from_number, to_number=to_number), variables)
         except Exception:
-            logger.exception("Failed to initialize outbound call.")
+            logger.exception("Failed to initialize outbound call. The call will not be dialed.")
             raise
-        
+
+        check_response(httpx.post(
+            self._client.get_http_url("v3/create-outbound"),
+            headers=self._client._get_headers(),
+            params={"call_id": call_id}
+        ))
+
         logger.info("Outbound call created with session ID: %s", call_id)
         self._attach_to_call(call_id, call)
 

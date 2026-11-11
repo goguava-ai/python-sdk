@@ -9,6 +9,7 @@ from .commands import (
     SetPersona,
     SendInstructionCommand,
     TransferCommand,
+    HangupCommand,
     RetryTaskCommand,
     SetVariableCommand,
     SetLanguageMode,
@@ -158,6 +159,19 @@ class BaseCall:
                 soft_transfer=False
             )
         )
+
+    def immediate_hangup(self, final_script: str | None = None):
+        """Hang up the call immediately.
+
+        Unlike hangup(), this does not respect turn-taking. Any speech the agent
+        has already queued finishes, then the agent says the script (if provided)
+        and the call ends. The caller cannot interrupt once this has been sent.
+
+        Args:
+            final_script: Optional message for the agent to deliver word-for-word
+                immediately before hanging up. Defaults to no message.
+        """
+        self.send_command(HangupCommand(final_script=final_script))
 
 
 @telemetry_client.track_class()
